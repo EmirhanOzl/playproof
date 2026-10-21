@@ -1,0 +1,17 @@
+{
+  "name": "playproof",
+  "owner": {
+    "name": "Emirhan"
+  },
+  "metadata": {
+    "description": "playproof: eyes and hands for browser games"
+  },
+  "plugins": [
+    {
+      "name": "playproof",
+      "description": "See and playtest browser games: frame-by-frame contact sheets on a virtual clock, scripted play, crash-hunting monkey tests, phone layout checks and frame pacing.",
+      "source": "./",
+      "category": "development"
+    }
+  ]
+}

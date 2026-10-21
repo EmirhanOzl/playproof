@@ -1,0 +1,17 @@
+<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html, body { margin: 0; height: 100%; overflow: hidden; } canvas { display: block; width: 100%; height: 100%; touch-action: none; }</style></head>
+<body><canvas id="c"></canvas>
+<script>
+  // Burns 40 ms of main-thread time every frame: far over a 16.7 ms budget.
+  const c = document.getElementById("c"), g = c.getContext("2d");
+  c.width = innerWidth; c.height = innerHeight;
+  function frame(t) {
+    const until = performance.now() + 40;
+    while (performance.now() < until) {}
+    g.fillStyle = `hsl(${(t / 10) % 360} 60% 40%)`;
+    g.fillRect(0, 0, c.width, c.height);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+</script></body></html>

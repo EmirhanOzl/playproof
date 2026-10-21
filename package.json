@@ -1,0 +1,59 @@
+{
+  "name": "playproof",
+  "version": "0.1.0",
+  "description": "Eyes and hands for browser games. Lets coding agents (and you) see animation frame by frame, play scripted input, fuzz for crashes, check phone layouts and measure frame pacing.",
+  "keywords": [
+    "game",
+    "gamedev",
+    "html5",
+    "canvas",
+    "webgl",
+    "playtest",
+    "testing",
+    "animation",
+    "agent",
+    "agent-skills",
+    "claude-code",
+    "codex",
+    "cursor",
+    "playwright"
+  ],
+  "homepage": "https://github.com/EmirhanOzl/playproof#readme",
+  "bugs": "https://github.com/EmirhanOzl/playproof/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EmirhanOzl/playproof.git"
+  },
+  "license": "MIT",
+  "author": "Emirhan",
+  "type": "module",
+  "bin": {
+    "playproof": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.ts\"",
+    "check": "npm run typecheck && npm test",
+    "prepack": "npm run build",
+    "docs:images": "node scripts/docs-images.ts",
+    "docs:icon": "node scripts/icon.ts"
+  },
+  "dependencies": {
+    "playwright-core": "^1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jumper · playproof example</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b2838; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; touch-action: none; user-select: none; -webkit-user-select: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// A small one-button game used to demo playproof: tap, click or press Space to jump over the rocks.
+// It handles devicePixelRatio, letterboxes a 360×640 world, and exposes the optional window.playproof hook.
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const W = 360, H = 640, GROUND = 520;
+let scale = 1, offsetX = 0, offsetY = 0;
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(innerWidth * dpr);
+  canvas.height = Math.round(innerHeight * dpr);
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  offsetX = (innerWidth - W * scale) / 2;
+  offsetY = (innerHeight - H * scale) / 2;
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, dpr * offsetX, dpr * offsetY);
+}
+addEventListener("resize", resize);
+resize();
+
+const hero = { x: 90, y: GROUND, vy: 0, squash: 0, crouch: 0, grounded: true };
+let screen = "title", score = 0, best = 0, speed = 220, rocks = [], dust = [], spawnIn = 1.2, last = 0, time = 0, paused = false;
+
+const buttonRect = { x: W / 2 - 80, y: 380, w: 160, h: 56 };
+
+function reset() {
+  Object.assign(hero, { y: GROUND, vy: 0, squash: 0, crouch: 0, grounded: true });
+  rocks = []; dust = []; score = 0; speed = 220; spawnIn = 1.2;
+}
+
+function jump() {
+  if (screen !== "playing") {
+    reset();
+    screen = "playing";
+    return;
+  }
+  if (hero.grounded && hero.crouch === 0) hero.crouch = 0.07; // short anticipation squash before take-off
+}
+
+function puff(x, y, n) {
+  for (let i = 0; i < n; i++) {
+    dust.push({ x, y, vx: (Math.random() - 0.5) * 140, vy: -Math.random() * 90, life: 0.5 + Math.random() * 0.3, age: 0 });
+  }
+}
+
+function update(dt) {
+  time += dt;
+  for (const d of dust) { d.age += dt; d.x += d.vx * dt; d.y += d.vy * dt; d.vy += 300 * dt; }
+  dust = dust.filter((d) => d.age < d.life);
+  if (screen !== "playing") return;
+
+  if (hero.crouch > 0) {
+    hero.crouch -= dt;
+    if (hero.crouch <= 0) { hero.crouch = 0; hero.vy = -620; hero.grounded = false; hero.squash = -0.35; puff(hero.x, GROUND, 6); }
+  }
+  if (!hero.grounded) {
+    hero.vy += 1700 * dt;
+    hero.y += hero.vy * dt;
+    if (hero.y >= GROUND) { hero.y = GROUND; hero.vy = 0; hero.grounded = true; hero.squash = 0.4; puff(hero.x, GROUND, 10); }
+  }
+  hero.squash *= Math.pow(0.0008, dt); // springs back to round
+
+  speed += 6 * dt;
+  spawnIn -= dt;
+  if (spawnIn <= 0) {
+    rocks.push({ x: W + 30, w: 26 + Math.random() * 22, h: 26 + Math.random() * 30, scored: false });
+    spawnIn = 0.9 + Math.random() * 0.9;
+  }
+  for (const r of rocks) {
+    r.x -= speed * dt;
+    if (!r.scored && r.x + r.w < hero.x - 18) { r.scored = true; score++; }
+    const hit = hero.x + 16 > r.x && hero.x - 16 < r.x + r.w && hero.y > GROUND - r.h + 6;
+    if (hit) { screen = "over"; best = Math.max(best, score); puff(hero.x, hero.y - 10, 16); }
+  }
+  rocks = rocks.filter((r) => r.x > -80);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+
+function drawHero() {
+  const breathe = screen === "title" ? Math.sin(time * 3) * 0.05 : 0;
+  const s = hero.crouch > 0 ? 0.3 : hero.squash + breathe; // >0 squashed, <0 stretched
+  const rx = 22 * (1 + s * 0.6), ry = 22 * (1 - s * 0.5);
+  ctx.save();
+  ctx.translate(hero.x, hero.y);
+  ctx.fillStyle = "rgba(0,0,0,0.18)";
+  ctx.beginPath(); ctx.ellipse(0, GROUND - hero.y + 2, 20 * (1 - (GROUND - hero.y) / 400), 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#45d39b";
+  ctx.beginPath(); ctx.ellipse(0, -ry, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#7af0c0";
+  ctx.beginPath(); ctx.ellipse(-rx * 0.35, -ry * 1.45, rx * 0.28, ry * 0.18, -0.4, 0, Math.PI * 2); ctx.fill();
+  const look = screen === "over" ? 0 : 3;
+  ctx.fillStyle = "#fff";
+  for (const ex of [-7, 9]) { ctx.beginPath(); ctx.ellipse(ex, -ry * 1.15, 5.5, 7, 0, 0, Math.PI * 2); ctx.fill(); }
+  ctx.fillStyle = "#1b2838";
+  for (const ex of [-7, 9]) {
+    if (screen === "over") { ctx.fillRect(ex + look - 4, -ry * 1.15 - 1, 8, 2.5); }
+    else { ctx.beginPath(); ctx.arc(ex + look, -ry * 1.12, 3, 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.restore();
+}
+
+function draw() {
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, "#2d5b8a"); sky.addColorStop(1, "#f2a96b");
+  ctx.fillStyle = "#1b2838";
+  ctx.fillRect(-offsetX / scale, -offsetY / scale, innerWidth / scale, innerHeight / scale);
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#ffe6a8"; ctx.beginPath(); ctx.arc(270, 170, 46, 0, Math.PI * 2); ctx.fill();
+  const drift = (time * (screen === "playing" ? speed * 0.25 : 12)) % 240;
+  ctx.fillStyle = "#3f6f6b";
+  for (let i = -1; i < 4; i++) { ctx.beginPath(); ctx.ellipse(i * 240 - drift + 60, GROUND + 10, 150, 90, 0, Math.PI, 0); ctx.fill(); }
+  ctx.fillStyle = "#58472f"; ctx.fillRect(0, GROUND, W, H - GROUND);
+  ctx.fillStyle = "#7bbf5a"; ctx.fillRect(0, GROUND, W, 10);
+
+  for (const r of rocks) {
+    ctx.fillStyle = "#6d7480";
+    roundRect(r.x, GROUND - r.h, r.w, r.h + 4, 8); ctx.fill();
+    ctx.fillStyle = "#8b93a1"; roundRect(r.x + 4, GROUND - r.h + 4, r.w * 0.45, r.h * 0.35, 5); ctx.fill();
+  }
+  for (const d of dust) {
+    ctx.fillStyle = `rgba(240, 225, 200, ${1 - d.age / d.life})`;
+    ctx.beginPath(); ctx.arc(d.x, d.y, 3 + d.age * 6, 0, Math.PI * 2); ctx.fill();
+  }
+  drawHero();
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#fff";
+  ctx.font = "700 40px system-ui, sans-serif";
+  if (screen === "playing") ctx.fillText(String(score), W / 2, 90);
+  if (screen !== "playing") {
+    ctx.font = "800 46px system-ui, sans-serif";
+    ctx.fillText(screen === "title" ? "JUMPER" : "OUCH!", W / 2, 250);
+    ctx.font = "500 17px system-ui, sans-serif";
+    ctx.fillText(screen === "title" ? "tap or press space to jump" : `score ${score} · best ${best}`, W / 2, 290);
+    const pulse = 1 + Math.sin(time * 4) * 0.03;
+    ctx.save();
+    ctx.translate(W / 2, buttonRect.y + buttonRect.h / 2); ctx.scale(pulse, pulse);
+    ctx.fillStyle = "#ffd25e"; roundRect(-buttonRect.w / 2, -buttonRect.h / 2, buttonRect.w, buttonRect.h, 16); ctx.fill();
+    ctx.fillStyle = "#3b2a10"; ctx.font = "800 24px system-ui, sans-serif";
+    ctx.fillText(screen === "title" ? "PLAY" : "RETRY", 0, 9);
+    ctx.restore();
+  }
+}
+
+function frame(t) {
+  const dt = last ? Math.min(0.05, (t - last) / 1000) : 0;
+  last = t;
+  if (!paused) update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); jump(); });
+addEventListener("keydown", (e) => { if (e.code === "Space" || e.key === "ArrowUp") { e.preventDefault(); jump(); } });
+document.addEventListener("visibilitychange", () => { paused = document.visibilityState === "hidden"; });
+
+// Optional playproof hook: lets `play` tap "@Play", lets `monkey` aim at real buttons, and crops captures to the
+// 360×640 world instead of the whole letterboxed canvas.
+window.playproof = {
+  ready: true,
+  state: () => ({ screen, score }),
+  area: () => ({ x: offsetX, y: offsetY, width: W * scale, height: H * scale }),
+  targets: () => {
+    const toPage = (r, label) => ({ x: offsetX + r.x * scale, y: offsetY + r.y * scale, width: r.w * scale, height: r.h * scale, label });
+    return screen === "playing" ? [toPage({ x: 0, y: 0, w: W, h: H }, "Jump")] : [toPage(buttonRect, screen === "title" ? "Play" : "Retry")];
+  },
+};
+</script>
+</body>
+</html>

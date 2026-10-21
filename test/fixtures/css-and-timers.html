@@ -1,0 +1,18 @@
+<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { margin: 0; background: #111; height: 100vh; overflow: hidden; }
+  #box { position: absolute; left: 0; top: 40px; width: 40px; height: 40px; background: #4af; animation: slide 1s linear infinite; }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(300px); } }
+  #dot { position: absolute; left: 0; top: 120px; width: 40px; height: 40px; background: #fa4; border-radius: 50%; }
+</style></head>
+<body><div id="box"></div><div id="dot"></div>
+<script>
+  // Moves on a 50 ms setInterval: 6 px per tick, wrapping at 300 px.
+  let x = 0;
+  setInterval(() => { x = (x + 6) % 300; document.getElementById("dot").style.left = x + "px"; }, 50);
+  window.positions = () => ({
+    box: new DOMMatrix(getComputedStyle(document.getElementById("box")).transform).m41,
+    dot: parseFloat(document.getElementById("dot").style.left || "0"),
+  });
+</script></body></html>

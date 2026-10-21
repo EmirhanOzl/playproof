@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Buggy · playproof example</title>
+<!-- Planted bugs, each one something playproof should report (the test suite checks them):
+     1. no <meta name="viewport">                      (devices)
+     2. fixed 320×480 canvas stretched by CSS            (devices: stretched + blurry)
+     3. default body margin → the page scrolls           (devices)
+     4. no touch-action on the canvas                    (devices)
+     5. the ball respawns without any transition         (frames: sudden jump)
+     6. a stray frame with the wrong background          (frames: one-frame flicker)
+     7. the 12th tap calls a method on undefined         (monkey: uncaught TypeError)
+     8. a sprite that does not exist                     (any command: failed request) -->
+<style>
+  canvas { width: 100vw; height: 100vh; background: #222; }
+</style>
+</head>
+<body>
+<canvas id="game" width="320" height="480"></canvas>
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+const sprite = new Image();
+sprite.src = "sprites/missing.png";
+
+const state = { taps: 0, frame: 0, start: null, powerup: undefined };
+
+function draw(t) {
+  if (state.start === null) state.start = t;
+  const elapsed = (t - state.start) / 1000;
+  const cycle = elapsed % 1.5; // respawns every 1.5 s, with no fade or tween
+  const x = 40 + cycle * 160;
+  const y = 400 - cycle * 200;
+  state.frame++;
+  ctx.fillStyle = state.frame % 40 === 0 ? "#f4f4f4" : "#203040";
+  ctx.fillRect(0, 0, 320, 480);
+  ctx.fillStyle = "#ffcc33";
+  ctx.beginPath();
+  ctx.arc(x, y, 22, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.font = "16px sans-serif";
+  ctx.fillText(`taps: ${state.taps}`, 12, 24);
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+canvas.addEventListener("pointerdown", () => {
+  state.taps++;
+  if (state.taps === 12) state.powerup.activate();
+});
+</script>
+</body>
+</html>

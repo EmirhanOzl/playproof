@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.playproof/
+*.tgz
+.DS_Store
