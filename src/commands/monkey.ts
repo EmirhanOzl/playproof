@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { describeDevice } from "../devices.ts";
 import type { Driver, HookTarget, Rect } from "../driver.ts";
 import { issueFindings, RunDir, type Finding, type Report, type ReportImage } from "../report.ts";
-import { openSession } from "../session.ts";
+import { openGameSession } from "../session.ts";
 import { Compositor, type Tile } from "../sheet.ts";
 import { formatTime, imageList, sessionOptions, type CommonOptions } from "./common.ts";
 
@@ -31,7 +30,7 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
   const run = RunDir.create("monkey", options.out);
   const seed = options.seed ?? 1;
   const random = mulberry32(seed);
-  const session = await openSession(sessionOptions(options, { clock: !options.realtime }));
+  const session = await openGameSession(sessionOptions(options, { clock: !options.realtime }), options.android);
   const { driver } = session;
   let compositor: Compositor | null = null;
   const log: string[] = [];
@@ -134,7 +133,7 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
       const total = stoppedAt === null ? options.steps : stoppedAt + 1;
       const png = await compositor.sheet({
         title: `monkey  ·  ${total} actions  ·  seed ${seed}`,
-        subtitle: `${describeDevice(options.device)}  ·  ${options.realtime ? "real time" : "virtual clock"}  ·  ${formatTime(gameTime)} of game time  ·  checkpoints along the run`,
+        subtitle: `${session.deviceLabel}  ·  ${options.realtime ? "real time" : "virtual clock"}  ·  ${formatTime(gameTime)} of game time  ·  checkpoints along the run`,
         tiles: checkpoints,
         tileHeight: 220,
         maxWidth: 1600,
@@ -150,7 +149,7 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
     return {
       command: "monkey",
       target: session.url,
-      device: describeDevice(options.device),
+      device: session.deviceLabel,
       images,
       findings,
       data: {

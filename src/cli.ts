@@ -61,6 +61,10 @@ Common options
   --browser <name>     chromium | chrome | msedge | path to a Chromium-based browser
   --headed             Show the browser window
   --port <n>           Port for the built-in static server (folder/file targets)
+  --android            Run on a USB-connected Android phone, in Chrome (frames, play, monkey, perf)
+  --app <package>      Run inside an Android app's WebView (Capacitor, Cordova, Ionic): attaches to the app,
+                       reloads it with the virtual clock, and reloads it back when done. No target needed.
+  --serial <id>        Which phone, when several are connected (see adb devices)
 
 frames
   --do <steps>         Steps to run before filming (e.g. "tap 50%,80%" to trigger a jump)
@@ -97,8 +101,7 @@ perf
   --cpu <n>            Slow the CPU n times to approximate a phone (default 4; 1 = off)
   --do <steps>         Play this script while measuring
   --monkey             Tap randomly while measuring
-  --android            Measure in Chrome on a USB-connected Android phone instead
-  --serial <id>        Which phone, when several are connected (see adb devices)
+  --android, --app     Measure on a real phone (see Common options)
 
 check
   --update             Accept the current motion as the new baselines
@@ -151,6 +154,7 @@ const OPTIONS = {
   monkey: { type: "boolean" },
   android: { type: "boolean" },
   serial: { type: "string" },
+  app: { type: "string" },
   project: { type: "boolean" },
   agent: { type: "string" },
   help: { type: "boolean", short: "h" },
@@ -194,8 +198,13 @@ async function main(argv: string[]): Promise<number> {
   // Precedence: command line, then the scenario, then the config file, then built-in defaults.
   const config = loadConfig(v.config);
   const scenario: Scenario = v.scenario ? scenarioOf(config, v.scenario) : {};
-  const target = rest[0] ?? config?.target;
-  if (!target) {
+  // An app's WebView needs no target: playproof reloads the page the app has open.
+  const android = v.android || v.app ? { serial: v.serial ?? null, app: v.app ?? null } : null;
+  if (android && (command === "devices" || command === "check")) {
+    throw new UsageError(`${command} runs in a local browser; --android and --app work with frames, play, monkey and perf.`);
+  }
+  const target = rest[0] ?? config?.target ?? (android?.app ? "" : undefined);
+  if (target === undefined) {
     throw new UsageError(`Missing <target>. Example: playproof ${command} http://localhost:5173 (or set "target" in ${CONFIG_FILE})`);
   }
   if (rest.length > 1) throw new UsageError(`Unexpected argument "${rest[1]}". Quote step lists: --do "tap 50%,50%; wait 1s"`);
@@ -219,6 +228,7 @@ async function main(argv: string[]): Promise<number> {
     seed: seed === "off" ? null : seed ? integer(seed, "--seed") : 1,
     port: v.port ? integer(v.port, "--port") : undefined,
     fps: 60,
+    android,
   };
   const steps = () => (v.do || v.script ? loadSteps(v.do, v.script) : loadSteps(scenario.do, scenario.script));
   const zoom = v.zoom ?? scenario.zoom;
@@ -288,10 +298,9 @@ async function main(argv: string[]): Promise<number> {
       result = await perfCommand({
         ...common,
         durationMs: duration ? parseTime(duration) : 10000,
-        cpu: v.cpu ? positive(v.cpu, "--cpu") : v.android ? 1 : 4,
+        cpu: v.cpu ? positive(v.cpu, "--cpu") : android ? 1 : 4,
         steps: steps(),
         monkey: Boolean(v.monkey),
-        android: v.android ? (v.serial ?? true) : null,
       });
   }
 

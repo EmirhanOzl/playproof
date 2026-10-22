@@ -34,6 +34,11 @@ const common = {
   ready: { type: "string", description: "JavaScript expression that is true once the game has loaded" },
   waitFor: { type: "string", description: "CSS selector to wait for before starting" },
   area: { type: "string", description: "CSS selector of the game area (default: the largest canvas)" },
+  android: { type: "boolean", description: "Run on a USB-connected Android phone (in Chrome)" },
+  app: {
+    type: "string",
+    description: "Package name of an Android app whose WebView to test (Capacitor, Cordova, Ionic); no target needed",
+  },
 } as const;
 
 const steps = { type: "string", description: `Steps separated by ";". ${STEP_HELP.replace(/\s+/g, " ")}` } as const;
@@ -125,7 +130,6 @@ const TOOLS = [
         steps,
         monkey: { type: "boolean", description: "Tap randomly while measuring" },
         cpu: { type: "number", description: "CPU slowdown factor for local runs (default 4, 1 = off)" },
-        android: { type: "boolean", description: "Measure on a USB-connected Android phone" },
       },
       required: [],
     },
@@ -231,8 +235,9 @@ function runTool(name: string, args: Record<string, unknown>): Promise<Report & 
   // Same precedence as the command line: arguments, then the scenario, then playproof.config.json.
   const config = loadConfig(undefined);
   const scenario: Scenario = text("scenario") ? scenarioOf(config, text("scenario")!) : {};
-  const target = text("target") ?? config?.target;
-  if (!target) throw new Error('"target" is required (or set "target" in playproof.config.json)');
+  const android = args.android || text("app") ? { serial: null, app: text("app") ?? null } : null;
+  const target = text("target") ?? config?.target ?? (android?.app ? "" : undefined);
+  if (target === undefined) throw new Error('"target" is required (or set "target" in playproof.config.json)');
   const deviceName = text("device") ?? scenario.device ?? config?.device;
   const base: CommonOptions = {
     target,
@@ -246,6 +251,7 @@ function runTool(name: string, args: Record<string, unknown>): Promise<Report & 
     json: false,
     seed: typeof args.seed === "number" ? args.seed : config?.seed === "off" ? null : (config?.seed ?? 1),
     fps: 60,
+    android,
   };
   const stepList = text("steps") ? parseSteps(text("steps")!) : loadSteps(scenario.do, scenario.script);
   const duration = text("duration") ?? scenario.duration;
@@ -295,10 +301,9 @@ function runTool(name: string, args: Record<string, unknown>): Promise<Report & 
       return perfCommand({
         ...base,
         durationMs: duration ? parseTime(duration) : 10000,
-        cpu: typeof args.cpu === "number" ? args.cpu : args.android ? 1 : 4,
+        cpu: typeof args.cpu === "number" ? args.cpu : android ? 1 : 4,
         steps: stepList,
         monkey: Boolean(args.monkey),
-        android: args.android ? true : null,
       });
   }
 }

@@ -1,7 +1,8 @@
 import type { Browser, BrowserContext, Page, Request } from "playwright-core";
 import { launchBrowser } from "./browser.ts";
-import type { Device } from "./devices.ts";
-import { PlaywrightDriver } from "./driver.ts";
+import type { AndroidTarget } from "./android.ts";
+import { describeDevice, type Device } from "./devices.ts";
+import { PlaywrightDriver, type Driver } from "./driver.ts";
 import { installClock } from "./inject/clock.ts";
 import { installProbe } from "./inject/probe.ts";
 import { openTarget, UsageError, type Target } from "./target.ts";
@@ -33,17 +34,32 @@ export interface Issue {
   during: string;
 }
 
-export interface Session {
+// What the commands need, wherever the game runs: a local browser or a phone (android.ts).
+export interface GameSession {
   url: string;
-  device: Device;
+  // How the device is described in sheets and reports.
+  deviceLabel: string;
+  // The local browser that draws sheets and charts.
   browser: Browser;
-  context: BrowserContext;
-  page: Page;
-  driver: PlaywrightDriver;
+  driver: Driver;
   issues: Issue[];
   // Set by commands so issues are attributed to the action that caused them.
   during: string;
   close(): Promise<void>;
+}
+
+export interface Session extends GameSession {
+  device: Device;
+  context: BrowserContext;
+  page: Page;
+  driver: PlaywrightDriver;
+}
+
+// A phone session when options.android is set, else a local browser.
+export async function openGameSession(options: SessionOptions, android: AndroidTarget | null | undefined): Promise<GameSession> {
+  if (!android) return openSession(options);
+  const { openAndroidSession } = await import("./android.ts");
+  return openAndroidSession(options, android);
 }
 
 // On the virtual clock the network should look instant to the game: whenever requests are in flight, virtual time
@@ -127,6 +143,7 @@ export async function openSession(options: SessionOptions, shared?: { browser: B
 
     const session: Session = {
       url: target.url,
+      deviceLabel: describeDevice(options.device),
       device: options.device,
       browser,
       context,
@@ -210,8 +227,24 @@ export function readinessCheck(expression: string | null): boolean {
 }
 
 async function load(session: Session, options: SessionOptions, network: NetworkTracker): Promise<void> {
-  const { page, driver } = session;
-  await page.goto(session.url, { waitUntil: "load", timeout: options.timeoutMs });
+  await session.page.goto(session.url, { waitUntil: "load", timeout: options.timeoutMs });
+  await prepareGame(session.driver, network, options);
+  session.during = "idle";
+}
+
+// What loading needs from wherever the game runs (a local browser or a phone).
+export interface LoadNetwork {
+  idle(): Promise<void>;
+  pending(): number;
+}
+
+// After the page's load event: wait until the game is ready, then let it settle. Shared by desktop and phone
+// sessions, so it only talks to the game through the driver.
+export async function prepareGame(
+  driver: Driver,
+  network: LoadNetwork,
+  options: Pick<SessionOptions, "waitFor" | "ready" | "timeoutMs" | "settleMs">,
+): Promise<void> {
   const deadline = Date.now() + options.timeoutMs;
   const describe = (): string =>
     [
@@ -221,20 +254,23 @@ async function load(session: Session, options: SessionOptions, network: NetworkT
     ]
       .filter(Boolean)
       .join(", ");
+  const visible = (selector: string): string =>
+    `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden"; })()`;
   const isReady = async (): Promise<boolean> => {
-    if (options.waitFor && !(await page.locator(options.waitFor).first().isVisible().catch(() => false))) return false;
-    if (options.ready) return page.evaluate(readinessCheck, options.ready);
-    return page.evaluate(readinessCheck, null);
+    if (options.waitFor && !(await driver.evaluate(visible(options.waitFor)).catch(() => false))) return false;
+    return Boolean(await driver.evaluate(`(${readinessCheck.toString()})(${JSON.stringify(options.ready ?? null)})`));
+  };
+  const notReady = (): never => {
+    throw new UsageError(`The game was not ready after ${options.timeoutMs} ms (waiting for ${describe()}).`);
   };
 
   if (!driver.virtual) {
     while (!(await isReady())) {
-      if (Date.now() > deadline) throw new UsageError(`The game was not ready after ${options.timeoutMs} ms (waiting for ${describe()}).`);
+      if (Date.now() > deadline) notReady();
       await sleep(50);
     }
-    await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
-    if (options.settleMs > 0) await page.waitForTimeout(options.settleMs);
-    session.during = "idle";
+    for (const until = Date.now() + 5000; network.pending() > 0 && Date.now() < until; ) await sleep(50);
+    if (options.settleMs > 0) await sleep(options.settleMs);
     return;
   }
 
@@ -246,17 +282,16 @@ async function load(session: Session, options: SessionOptions, network: NetworkT
     await network.idle();
     quietFrames = network.pending() === 0 ? quietFrames + 1 : 0;
     if (quietFrames >= 3 && (await isReady())) break;
-    if (Date.now() > deadline) throw new UsageError(`The game was not ready after ${options.timeoutMs} ms (waiting for ${describe()}).`);
+    if (Date.now() > deadline) notReady();
     await driver.advance(driver.frameMs);
   }
   // Settle counts from the start of the game's render loop once there is one: engines measure their own time from
   // there, so how long loading took (which can vary with workers and storage) does not shift the scene. The loop
   // may start during the settle time itself, so the end is recomputed every frame.
-  const clockState = () =>
-    page.evaluate(() => {
-      const clock = (window as unknown as { __playproofClock: { now(): number; loopStartedAt(): number | null } }).__playproofClock;
-      return { now: clock.now(), loopStart: clock.loopStartedAt() };
-    });
+  const clockState = async () =>
+    (await driver.evaluate(
+      "(() => { const c = window.__playproofClock; return { now: c.now(), loopStart: c.loopStartedAt() }; })()",
+    )) as { now: number; loopStart: number | null };
   const begin = (await clockState()).now;
   for (let guard = 0; guard < 100000; guard++) {
     const { now, loopStart } = await clockState();
@@ -264,7 +299,6 @@ async function load(session: Session, options: SessionOptions, network: NetworkT
     if (now >= end - 1e-6) break;
     await driver.advance(Math.min(driver.frameMs, end - now));
   }
-  session.during = "idle";
 }
 
 function sleep(ms: number): Promise<void> {

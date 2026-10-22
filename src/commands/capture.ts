@@ -1,10 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { buildApng } from "../apng.ts";
-import { describeDevice } from "../devices.ts";
 import { issueFindings, RunDir, type Finding, type Report, type ReportImage } from "../report.ts";
 import { runSteps, type StoryItem } from "../runner.ts";
-import { openSession } from "../session.ts";
+import { openGameSession } from "../session.ts";
 import { Compositor } from "../sheet.ts";
 import type { Step } from "../steps.ts";
 import {
@@ -52,7 +51,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
     });
   }
 
-  const session = await openSession(sessionOptions(options, { clock: !options.realtime }));
+  const session = await openGameSession(sessionOptions(options, { clock: !options.realtime }), options.android);
   let compositor: Compositor | null = null;
   try {
     const result = await runSteps(session.driver, steps, {
@@ -94,7 +93,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
         maxTiles: options.maxTiles,
         boxes: options.boxes,
         frameMs: session.driver.frameMs,
-        device: options.device,
+        deviceLabel: session.deviceLabel,
         title: `${command === "frames" ? "frames" : label}  ·  ${film.label}`,
         enlarged: film !== captured,
       });
@@ -113,7 +112,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
       if (n === 0 && options.compare) {
         const compared = await buildCompareSheet(compositor, film, options.compare, sheet.diffs, {
           frameMs: session.driver.frameMs,
-          device: options.device,
+          deviceLabel: session.deviceLabel,
         });
         imageList(images, run, "compare.png", "this run against the earlier one, frame by frame", compared.png);
         findings.push(compared.finding);
@@ -158,7 +157,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
         compositor,
         items,
         `${command}  ·  ${steps.length} steps`,
-        `${describeDevice(options.device)}  ·  ${options.realtime ? "real time" : "virtual clock"}  ·  ${formatTime(result.elapsedMs)} of game time`,
+        `${session.deviceLabel}  ·  ${options.realtime ? "real time" : "virtual clock"}  ·  ${formatTime(result.elapsedMs)} of game time`,
         findings
           .filter((f) => f.severity !== "info")
           .slice(0, 6)
@@ -170,7 +169,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
     const report: Report = {
       command,
       target: session.url,
-      device: describeDevice(options.device),
+      device: session.deviceLabel,
       images,
       findings,
       log: result.log,

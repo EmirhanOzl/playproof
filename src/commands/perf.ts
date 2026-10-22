@@ -1,14 +1,9 @@
-import type { Browser } from "playwright-core";
-import { openAndroidTab } from "../android.ts";
-import { launchBrowser } from "../browser.ts";
-import { describeDevice } from "../devices.ts";
 import type { Driver } from "../driver.ts";
 import { issueFindings, RunDir, type Finding, type Report, type ReportImage } from "../report.ts";
 import { runSteps } from "../runner.ts";
-import { openSession, type Session } from "../session.ts";
+import { openGameSession, type GameSession } from "../session.ts";
 import { Compositor } from "../sheet.ts";
 import type { Step } from "../steps.ts";
-import { openTarget } from "../target.ts";
 import { formatTime, imageList, sessionOptions, type CommonOptions } from "./common.ts";
 import { mulberry32 } from "./monkey.ts";
 
@@ -17,7 +12,6 @@ export interface PerfOptions extends CommonOptions {
   cpu: number;
   steps: Step[];
   monkey: boolean;
-  android: string | true | null;
 }
 
 interface FrameData {
@@ -42,30 +36,32 @@ export interface PerfStats {
   worstLongTaskMs: number;
 }
 
-// Real-time frame pacing while the game runs (optionally while a script or random input plays it).
+// Real-time frame pacing while the game runs (optionally while a script or random input plays it), in a local
+// browser or on a USB-connected phone (in Chrome or inside an app's WebView).
 export async function perfCommand(options: PerfOptions): Promise<Report & { run: RunDir }> {
   const run = RunDir.create("perf", options.out);
-  if (options.android) return perfAndroid(options, run);
-
-  const session = await openSession(sessionOptions(options, { clock: false, cpuThrottle: options.cpu }));
+  const onPhone = Boolean(options.android);
+  const session = await openGameSession(sessionOptions(options, { clock: false, cpuThrottle: onPhone ? undefined : options.cpu }), options.android);
   let compositor: Compositor | null = null;
   try {
     const { data, heapStart, heapEnd, image } = await measure(session.driver, options, session);
     compositor = await Compositor.open(session.browser);
-    const where =
-      options.cpu > 1
+    const where = onPhone
+      ? "real phone"
+      : options.cpu > 1
         ? `CPU slowed ${options.cpu}× (a rough stand-in for a mid-range phone), headless software rendering`
         : "full desktop CPU, headless software rendering";
     return await finishReport(run, compositor, options, data, {
       target: session.url,
-      device: describeDevice(options.device),
+      device: session.deviceLabel,
       where,
       heapStart,
       heapEnd,
       image,
       extra: issueFindings(session.issues),
-      caveat:
-        "Local numbers are a proxy: JavaScript cost is real, but headless Chromium renders without a GPU, so canvas/WebGL-heavy games look slower than on hardware. Use --headed for GPU rendering, or --android for a real phone.",
+      caveat: onPhone
+        ? null
+        : "Local numbers are a proxy: JavaScript cost is real, but headless Chromium renders without a GPU, so canvas/WebGL-heavy games look slower than on hardware. Use --headed for GPU rendering, or --android for a real phone.",
     });
   } finally {
     await compositor?.close();
@@ -73,37 +69,7 @@ export async function perfCommand(options: PerfOptions): Promise<Report & { run:
   }
 }
 
-async function perfAndroid(options: PerfOptions, run: RunDir): Promise<Report & { run: RunDir }> {
-  const target = await openTarget(options.target, options.port);
-  const serial = options.android === true ? null : options.android;
-  let tab: Awaited<ReturnType<typeof openAndroidTab>> | null = null;
-  let browser: Browser | null = null;
-  let compositor: Compositor | null = null;
-  try {
-    tab = await openAndroidTab(target.url, serial, Math.max(options.settleMs, 1000), options.timeoutMs);
-    browser = await launchBrowser(options.browser, false);
-    compositor = await Compositor.open(browser);
-    const { data, heapStart, heapEnd, image, errors } = await measure(tab.driver, options, null);
-    const { phone } = tab;
-    return await finishReport(run, compositor, options, data, {
-      target: target.url,
-      device: `${phone.model} (Android ${phone.android}, ${phone.chrome}, serial ${phone.serial})`,
-      where: `real phone: ${phone.model}`,
-      heapStart,
-      heapEnd,
-      image,
-      extra: errors.map((message) => ({ severity: "error" as const, title: `Uncaught error on the phone: ${message.split("\n")[0]}` })),
-      caveat: null,
-    });
-  } finally {
-    await compositor?.close();
-    await browser?.close().catch(() => {});
-    await tab?.close();
-    await target.close();
-  }
-}
-
-async function measure(driver: Driver, options: PerfOptions, session: Session | null) {
+async function measure(driver: Driver, options: PerfOptions, session: GameSession | null) {
   const probe = "window.__playproofProbe";
   const heapStart = (await driver.evaluate(`${probe}.heapMB()`)) as number | null;
   await driver.evaluate(`${probe}.startFrames()`);

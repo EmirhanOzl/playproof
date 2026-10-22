@@ -3,26 +3,26 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import type { Browser } from "playwright-core";
+import { launchBrowser } from "./browser.ts";
 import { findArea, readState, readTargets, setHidden, type Driver, type HookTarget, type Rect } from "./driver.ts";
+import { installClock } from "./inject/clock.ts";
 import { installProbe } from "./inject/probe.ts";
-import { UsageError } from "./target.ts";
+import { prepareGame, type GameSession, type Issue, type IssueKind, type SessionOptions } from "./session.ts";
+import { openTarget, UsageError, type Target } from "./target.ts";
 
 const run = promisify(execFile);
 
-// Chrome on the phone exposes every open tab over DevTools. playproof opens its own tab, talks only to that tab by
-// id, and closes it at the end; it never lists, reads or touches the user's other tabs.
+// Two ways onto a phone:
+// - Chrome: playproof opens its own tab, talks only to that tab by id, and closes it at the end. Chrome exposes every
+//   open tab over DevTools; playproof never lists, reads or touches the others.
+// - An app's WebView (Capacitor, Cordova, Ionic, any hybrid app with WebView debugging on): playproof attaches to the
+//   app's own page, reloads it with the virtual clock, and reloads it again without the clock when it is done.
 
-export interface AndroidPhone {
-  serial: string;
-  model: string;
-  android: string;
-  chrome: string;
-}
-
-export interface AndroidTab {
-  phone: AndroidPhone;
-  driver: CdpDriver;
-  close(): Promise<void>;
+export interface AndroidTarget {
+  serial: string | null;
+  // Package name of a WebView app, e.g. com.example.game. null = a tab in Chrome.
+  app: string | null;
 }
 
 function adbPath(): string {
@@ -58,8 +58,9 @@ async function freePort(): Promise<number> {
   });
 }
 
-// url: the page to open. servedPort / localhost ports are reversed so the phone reaches this machine over USB.
-export async function openAndroidTab(url: string, wantedSerial: string | null, settleMs: number, timeoutMs: number): Promise<AndroidTab> {
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+
+async function pickDevice(wanted: string | null): Promise<string> {
   const listed = (await adb(null, "devices"))
     .split("\n")
     .slice(1)
@@ -74,82 +75,53 @@ export async function openAndroidTab(url: string, wantedSerial: string | null, s
         : "No Android device connected. Connect a phone with USB debugging enabled.",
     );
   }
-  const serial = wantedSerial ?? ready[0]!;
+  const serial = wanted ?? ready[0]!;
   if (!ready.includes(serial)) throw new UsageError(`Device ${serial} is not connected (connected: ${ready.join(", ")}).`);
+  return serial;
+}
 
-  const cleanup: (() => Promise<unknown>)[] = [];
-  const undo = async (): Promise<void> => {
-    for (const step of cleanup.splice(0).reverse()) await step().catch(() => {});
-  };
-  // Ctrl+C must still close our tab and remove the port forwards on the phone.
-  const onSignal = (): void => {
-    void undo().finally(() => process.exit(130));
-  };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
-  cleanup.push(async () => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-  });
-  try {
-    const target = new URL(url);
-    if (["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)) {
-      const port = target.port || (target.protocol === "https:" ? "443" : "80");
-      await adb(serial, "reverse", `tcp:${port}`, `tcp:${port}`);
-      cleanup.push(() => adb(serial, "reverse", "--remove", `tcp:${port}`));
-    }
-    await ensureChromeDebuggable(serial);
-    const local = await freePort();
-    await adb(serial, "forward", `tcp:${local}`, "localabstract:chrome_devtools_remote");
-    cleanup.push(() => adb(serial, "forward", "--remove", `tcp:${local}`));
-    const devtools = `http://127.0.0.1:${local}`;
-
-    const version = (await fetchJson(`${devtools}/json/version`).catch(() => {
-      throw new UsageError("Chrome on the phone did not answer. Keep the screen on and unlocked, and retry.");
-    })) as { Browser?: string };
-    const [model, android] = await Promise.all([
-      adb(serial, "shell", "getprop", "ro.product.model"),
-      adb(serial, "shell", "getprop", "ro.build.version.release"),
-    ]);
-
-    // Android Chrome refuses /json/new; the browser-level DevTools socket can still open (and close) a tab.
-    const browser = await CdpConnection.connect(`ws://127.0.0.1:${local}/devtools/browser`);
-    cleanup.push(async () => browser.close());
-    const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
-    cleanup.push(() => browser.send("Target.closeTarget", { targetId }));
-    const cdp = await CdpConnection.connect(`ws://127.0.0.1:${local}/devtools/page/${targetId}`);
-    cleanup.push(async () => cdp.close());
-    // A background tab draws no frames and cannot be screenshotted.
-    await browser.send("Target.activateTarget", { targetId });
-
-    await cdp.send("Page.enable");
-    await cdp.send("Runtime.enable");
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: `(${installProbe.toString()})();` });
-    const loaded = cdp.waitFor("Page.loadEventFired", timeoutMs);
-    await cdp.send("Page.navigate", { url });
-    await loaded;
-    await new Promise((done) => setTimeout(done, settleMs));
-
-    const phone: AndroidPhone = { serial, model, android, chrome: version.Browser ?? "Chrome" };
-    return { phone, driver: new CdpDriver(cdp), close: undo };
-  } catch (error) {
-    await undo();
-    throw error;
-  }
+async function unixSockets(serial: string): Promise<string> {
+  return adb(serial, "shell", "cat", "/proc/net/unix");
 }
 
 // Chrome only opens its DevTools socket while it is in the foreground. If the socket is missing, bring Chrome to
 // the front (it shows whatever tab was last open; nothing is read from it) and wait for the socket.
-async function ensureChromeDebuggable(serial: string): Promise<void> {
-  const hasSocket = async () => /@chrome_devtools_remote\b/.test(await adb(serial, "shell", "cat", "/proc/net/unix"));
-  if (await hasSocket()) return;
-  await adb(serial, "shell", "am", "start", "-n", "com.android.chrome/com.google.android.apps.chrome.Main").catch(() => "");
-  for (let i = 0; i < 20; i++) {
-    await new Promise((done) => setTimeout(done, 500));
-    if (await hasSocket()) return;
+async function chromeSocket(serial: string): Promise<string> {
+  const has = async () => /@chrome_devtools_remote\b/.test(await unixSockets(serial));
+  if (!(await has())) {
+    await adb(serial, "shell", "am", "start", "-n", "com.android.chrome/com.google.android.apps.chrome.Main").catch(() => "");
+    let found = false;
+    for (let i = 0; i < 20 && !found; i++) {
+      await sleep(500);
+      found = await has();
+    }
+    if (!found) {
+      throw new UsageError(
+        "Chrome on the phone does not accept DevTools connections. Make sure Chrome is installed, the screen is on and unlocked, and USB debugging is allowed.",
+      );
+    }
+  }
+  return "chrome_devtools_remote";
+}
+
+// A WebView app exposes webview_devtools_remote_<pid> when WebView debugging is on (debug builds of Capacitor and
+// Cordova apps have it). Starts the app if it is not running.
+async function appSocket(serial: string, app: string): Promise<string> {
+  let pid = (await adb(serial, "shell", "pidof", app).catch(() => "")).split(/\s+/)[0] ?? "";
+  if (!pid) {
+    await adb(serial, "shell", "monkey", "-p", app, "-c", "android.intent.category.LAUNCHER", "1").catch(() => "");
+    for (let i = 0; i < 30 && !pid; i++) {
+      await sleep(500);
+      pid = (await adb(serial, "shell", "pidof", app).catch(() => "")).split(/\s+/)[0] ?? "";
+    }
+    if (!pid) throw new UsageError(`Could not start ${app} on the phone. Is it installed? (adb shell pm list packages | grep ${app})`);
+  }
+  for (let i = 0; i < 30; i++) {
+    if (new RegExp(`@webview_devtools_remote_${pid}\\b`).test(await unixSockets(serial))) return `webview_devtools_remote_${pid}`;
+    await sleep(500);
   }
   throw new UsageError(
-    "Chrome on the phone does not accept DevTools connections. Make sure Chrome is installed, the screen is on and unlocked, and USB debugging is allowed.",
+    `${app} is running but its WebView is not debuggable. Debug builds of Capacitor and Cordova apps are; for other builds enable WebView.setWebContentsDebuggingEnabled(true) (Capacitor: "webContentsDebuggingEnabled": true in capacitor.config).`,
   );
 }
 
@@ -197,8 +169,23 @@ class CdpConnection {
   static connect(url: string): Promise<CdpConnection> {
     return new Promise((done, fail) => {
       const socket = new WebSocket(url);
-      socket.addEventListener("open", () => done(new CdpConnection(socket)), { once: true });
-      socket.addEventListener("error", () => fail(new Error(`Could not connect to ${url}`)), { once: true });
+      const timer = setTimeout(() => fail(new Error(`Timed out connecting to ${url}`)), 15000);
+      socket.addEventListener(
+        "open",
+        () => {
+          clearTimeout(timer);
+          done(new CdpConnection(socket));
+        },
+        { once: true },
+      );
+      socket.addEventListener(
+        "error",
+        () => {
+          clearTimeout(timer);
+          fail(new Error(`Could not connect to ${url}`));
+        },
+        { once: true },
+      );
     });
   }
 
@@ -224,15 +211,25 @@ class CdpConnection {
     });
   }
 
+  on(method: string, listener: (params: never) => void): void {
+    const list = this.listeners.get(method) ?? [];
+    list.push(listener as (params: unknown) => void);
+    this.listeners.set(method, list);
+  }
+
   waitFor(method: string, timeoutMs: number): Promise<unknown> {
     return new Promise((done, fail) => {
-      const timer = setTimeout(() => fail(new Error(`Timed out waiting for ${method}`)), timeoutMs);
-      const list = this.listeners.get(method) ?? [];
-      list.push((params) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        settled = true;
+        fail(new Error(`Timed out waiting for ${method}`));
+      }, timeoutMs);
+      this.on(method, (params) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         done(params);
       });
-      this.listeners.set(method, list);
     });
   }
 
@@ -241,18 +238,101 @@ class CdpConnection {
   }
 }
 
-export class CdpDriver implements Driver {
-  readonly frameMs = 1000 / 60;
-  readonly virtual = false;
-  private readonly cdp: CdpConnection;
-  private touchId = 0;
+// Requests in flight on the phone, from the DevTools Network domain (the desktop session uses Playwright's events).
+class CdpNetwork {
+  private readonly inflight = new Set<string>();
+  private readonly ignored = new Set<string>();
+  private lastActivity = 0;
 
   constructor(cdp: CdpConnection) {
-    this.cdp = cdp;
+    cdp.on("Network.requestWillBeSent", (p: { requestId: string }) => {
+      this.inflight.add(p.requestId);
+      this.lastActivity = Date.now();
+    });
+    const done = (p: { requestId: string }): void => {
+      this.inflight.delete(p.requestId);
+      this.lastActivity = Date.now();
+    };
+    cdp.on("Network.loadingFinished", done);
+    cdp.on("Network.loadingFailed", done);
   }
 
-  async advance(ms: number): Promise<void> {
-    await new Promise((done) => setTimeout(done, ms));
+  busy(): boolean {
+    return this.pending() > 0 || Date.now() - this.lastActivity < 20;
+  }
+
+  pending(): number {
+    let count = 0;
+    for (const id of this.inflight) if (!this.ignored.has(id)) count++;
+    return count;
+  }
+
+  async idle(capMs = 10000): Promise<void> {
+    const until = Date.now() + capMs;
+    while (this.pending() > 0 && Date.now() < until) await sleep(5);
+    if (this.pending() > 0) for (const id of this.inflight) this.ignored.add(id);
+    const quietFor = Date.now() - this.lastActivity;
+    if (quietFor < 20) await sleep(20 - quietFor);
+  }
+}
+
+const KEYS: Record<string, { code: string; keyCode: number; text?: string }> = {
+  " ": { code: "Space", keyCode: 32, text: " " },
+  Enter: { code: "Enter", keyCode: 13, text: "\r" },
+  Escape: { code: "Escape", keyCode: 27 },
+  Tab: { code: "Tab", keyCode: 9 },
+  Backspace: { code: "Backspace", keyCode: 8 },
+  ArrowLeft: { code: "ArrowLeft", keyCode: 37 },
+  ArrowUp: { code: "ArrowUp", keyCode: 38 },
+  ArrowRight: { code: "ArrowRight", keyCode: 39 },
+  ArrowDown: { code: "ArrowDown", keyCode: 40 },
+};
+
+export class CdpDriver implements Driver {
+  readonly frameMs: number;
+  readonly virtual: boolean;
+  private readonly cdp: CdpConnection;
+  private readonly network: CdpNetwork;
+  private readonly areaSelector: string | null;
+  private touchId = 0;
+  private scale = 1;
+
+  constructor(cdp: CdpConnection, network: CdpNetwork, options: { fps: number; virtual: boolean; area: string | null }) {
+    this.cdp = cdp;
+    this.network = network;
+    this.frameMs = 1000 / options.fps;
+    this.virtual = options.virtual;
+    this.areaSelector = options.area;
+  }
+
+  async init(): Promise<void> {
+    this.scale = Number(await this.evaluate("window.devicePixelRatio")) || 1;
+  }
+
+  async advance(ms: number, frames = true): Promise<void> {
+    if (ms <= 0) return;
+    if (!this.virtual) {
+      await sleep(ms);
+      return;
+    }
+    // Same contract as the desktop driver: frame-sized steps, waiting out requests and other real-time work.
+    for (let left = ms; left > 1e-6; left -= this.frameMs) {
+      const step = Math.min(left, this.frameMs);
+      let pending = Number(
+        await this.evaluate(
+          `(async () => { const c = window.__playproofClock; c.advance(${step}, ${frames}); if (c.takeActivity()) await new Promise((d) => requestIdleCallback(d, { timeout: 50 })); return c.pending(); })()`,
+        ),
+      );
+      if (this.network.busy()) await this.network.idle();
+      for (const until = Date.now() + 5000; pending > 0; ) {
+        if (Date.now() > until) {
+          await this.evaluate("window.__playproofClock.abandonPending()");
+          break;
+        }
+        await sleep(5);
+        pending = Number(await this.evaluate("window.__playproofClock.pending()"));
+      }
+    }
   }
 
   async evaluate(expression: string): Promise<unknown> {
@@ -272,7 +352,7 @@ export class CdpDriver implements Driver {
   }
 
   area(): Promise<Rect> {
-    return this.call(findArea, null);
+    return this.call(findArea, this.areaSelector);
   }
 
   viewport(): Promise<{ width: number; height: number }> {
@@ -287,22 +367,42 @@ export class CdpDriver implements Driver {
     });
   }
 
-  async key(): Promise<void> {
-    throw new UsageError("Key steps are not supported with --android; use tap, drag, press and wait.");
+  async key(type: "down" | "up", key: string): Promise<void> {
+    const known = KEYS[key];
+    const printable = !known && key.length === 1;
+    const code = known?.code ?? (printable && /[a-z]/i.test(key) ? `Key${key.toUpperCase()}` : key);
+    const keyCode = known?.keyCode ?? (printable ? key.toUpperCase().charCodeAt(0) : 0);
+    const text = known?.text ?? (printable ? key : undefined);
+    await this.cdp.send("Input.dispatchKeyEvent", {
+      type: type === "down" ? (text ? "keyDown" : "rawKeyDown") : "keyUp",
+      key,
+      code,
+      windowsVirtualKeyCode: keyCode,
+      nativeVirtualKeyCode: keyCode,
+      ...(type === "down" && text ? { text, unmodifiedText: text } : {}),
+    });
   }
 
-  async typeText(): Promise<void> {
-    throw new UsageError("type is not supported with --android.");
+  async typeText(text: string): Promise<void> {
+    await this.cdp.send("Input.insertText", { text });
   }
 
-  async click(): Promise<void> {
-    throw new UsageError("click <selector> is not supported with --android; tap a point instead.");
+  async click(selector: string): Promise<void> {
+    const box = (await this.evaluate(
+      `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`,
+    )) as { x: number; y: number } | null;
+    if (!box) throw new Error(`no element matches ${selector}`);
+    await this.pointer("down", box.x, box.y);
+    await this.pointer("up", box.x, box.y);
   }
 
-  async screenshot(clip: Rect | null): Promise<Buffer> {
+  async screenshot(clip: Rect | null, detailed = false): Promise<Buffer> {
+    const area = clip && clip.width >= 1 && clip.height >= 1 ? clip : { x: 0, y: 0, ...(await this.viewport()) };
+    // Clip is in CSS pixels; the phone renders at devicePixelRatio, so scale down for CSS-sized images.
     const result = (await this.cdp.send("Page.captureScreenshot", {
       format: "png",
-      ...(clip ? { clip: { ...clip, scale: 1 } } : {}),
+      clip: { ...area, scale: detailed ? 1 : 1 / this.scale },
+      captureBeyondViewport: false,
     })) as { data: string };
     return Buffer.from(result.data, "base64");
   }
@@ -317,5 +417,161 @@ export class CdpDriver implements Driver {
 
   async setVisibility(hidden: boolean): Promise<void> {
     await this.call(setHidden, hidden);
+  }
+}
+
+// Opens the game on a USB-connected phone and returns a session the commands can use like a desktop one.
+export async function openAndroidSession(options: SessionOptions, android: AndroidTarget): Promise<GameSession> {
+  const serial = await pickDevice(android.serial);
+  const cleanup: (() => Promise<unknown>)[] = [];
+  const undo = async (): Promise<void> => {
+    for (const step of cleanup.splice(0).reverse()) await step().catch(() => {});
+  };
+  // Ctrl+C must still restore the app, close our tab and remove the port forwards on the phone.
+  const onSignal = (): void => {
+    void undo().finally(() => process.exit(130));
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  cleanup.push(async () => {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  });
+
+  try {
+    let target: Target | null = null;
+    let url: string | null = null;
+    if (options.target) {
+      target = await openTarget(options.target, options.port);
+      const opened = target;
+      cleanup.push(() => opened.close());
+      url = target.url;
+      const parsed = new URL(url);
+      if (["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname)) {
+        const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+        await adb(serial, "reverse", `tcp:${port}`, `tcp:${port}`);
+        cleanup.push(() => adb(serial, "reverse", "--remove", `tcp:${port}`));
+      }
+    } else if (!android.app) {
+      throw new UsageError("Give a target to open in Chrome on the phone, or --app <package> to test a WebView app.");
+    }
+
+    const socket = android.app ? await appSocket(serial, android.app) : await chromeSocket(serial);
+    const local = await freePort();
+    await adb(serial, "forward", `tcp:${local}`, `localabstract:${socket}`);
+    cleanup.push(() => adb(serial, "forward", "--remove", `tcp:${local}`));
+    const version = (await fetchJson(`http://127.0.0.1:${local}/json/version`).catch(() => {
+      throw new UsageError("The phone did not answer over DevTools. Keep the screen on and unlocked, and retry.");
+    })) as { Browser?: string };
+
+    let pageSocket: string;
+    if (android.app) {
+      // The app's own socket only lists the app's pages.
+      const pages = (await fetchJson(`http://127.0.0.1:${local}/json/list`)) as { type: string; url: string; webSocketDebuggerUrl?: string }[];
+      const page = pages.find((p) => p.type === "page" && p.webSocketDebuggerUrl && p.url !== "about:blank") ?? pages.find((p) => p.type === "page");
+      if (!page?.webSocketDebuggerUrl) throw new UsageError(`${android.app} has no WebView page open yet. Open the screen with the game and retry.`);
+      pageSocket = page.webSocketDebuggerUrl.replace(/^ws:\/\/[^/]+/, `ws://127.0.0.1:${local}`);
+    } else {
+      // Android Chrome refuses /json/new; the browser-level DevTools socket can still open (and close) a tab.
+      const browser = await CdpConnection.connect(`ws://127.0.0.1:${local}/devtools/browser`);
+      cleanup.push(async () => browser.close());
+      const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
+      cleanup.push(() => browser.send("Target.closeTarget", { targetId }));
+      // A background tab draws no frames and cannot be screenshotted.
+      await browser.send("Target.activateTarget", { targetId });
+      pageSocket = `ws://127.0.0.1:${local}/devtools/page/${targetId}`;
+    }
+
+    const cdp = await CdpConnection.connect(pageSocket);
+    cleanup.push(async () => cdp.close());
+    const network = new CdpNetwork(cdp);
+    const issues: Issue[] = [];
+    const session = { during: "loading" };
+    const add = (kind: IssueKind, message: string): void => {
+      if (issues.length < 500) issues.push({ kind, message: message.slice(0, 4000), during: session.during });
+    };
+    const urls = new Map<string, string>();
+    cdp.on("Network.requestWillBeSent", (p: { requestId: string; request: { url: string; method: string } }) =>
+      urls.set(p.requestId, `${p.request.method} ${p.request.url}`),
+    );
+    cdp.on("Runtime.exceptionThrown", (p: { exceptionDetails: { text: string; exception?: { description?: string } } }) =>
+      add("pageerror", p.exceptionDetails.exception?.description ?? p.exceptionDetails.text),
+    );
+    cdp.on("Runtime.consoleAPICalled", (p: { type: string; args: { value?: unknown; description?: string }[] }) => {
+      if (p.type === "error") add("console", p.args.map((a) => a.description ?? String(a.value)).join(" "));
+    });
+    cdp.on("Network.loadingFailed", (p: { requestId: string; errorText: string; canceled?: boolean }) => {
+      if (!p.canceled && !/ERR_ABORTED/.test(p.errorText)) add("request", `${urls.get(p.requestId) ?? "request"} → ${p.errorText}`);
+    });
+    cdp.on("Network.responseReceived", (p: { requestId: string; response: { status: number; url: string } }) => {
+      if (p.response.status < 400 || /\/favicon\.ico$/.test(new URL(p.response.url).pathname)) return;
+      add("request", `${urls.get(p.requestId) ?? p.response.url} → HTTP ${p.response.status}`);
+    });
+    cdp.on("Inspector.targetCrashed", () => add("crash", "The page crashed (renderer process died, often out of memory)."));
+
+    await cdp.send("Page.enable");
+    await cdp.send("Runtime.enable");
+    await cdp.send("Network.enable");
+    await cdp.send("Inspector.enable").catch(() => {});
+    const scripts: string[] = [];
+    const inject = async (source: string): Promise<void> => {
+      const { identifier } = (await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source })) as { identifier: string };
+      scripts.push(identifier);
+    };
+    await inject(`(${installProbe.toString()})();`);
+    if (options.clock) {
+      await inject(`(${installClock.toString()})(${JSON.stringify({ fps: options.fps, seed: options.seed })});`);
+      await cdp.send("Animation.enable");
+      await cdp.send("Animation.setPlaybackRate", { playbackRate: 0 });
+    }
+    if (android.app) {
+      // Give the app back exactly as it was: no injected scripts, normal animation speed, a fresh load.
+      cleanup.push(async () => {
+        for (const identifier of scripts) await cdp.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
+        await cdp.send("Animation.setPlaybackRate", { playbackRate: 1 }).catch(() => {});
+        await cdp.send("Page.reload", {}).catch(() => {});
+      });
+    }
+
+    const loaded = cdp.waitFor("Page.loadEventFired", options.timeoutMs);
+    if (url) await cdp.send("Page.navigate", { url });
+    else await cdp.send("Page.reload", {});
+    await loaded;
+    if (!url) url = String((await cdp.send("Runtime.evaluate", { expression: "location.href", returnByValue: true }) as { result: { value: string } }).result.value);
+
+    const driver = new CdpDriver(cdp, network, { fps: options.fps, virtual: options.clock, area: options.area ?? null });
+    await driver.init();
+    await prepareGame(driver, network, options);
+    session.during = "idle";
+
+    const [model, release, view] = await Promise.all([
+      adb(serial, "shell", "getprop", "ro.product.model"),
+      adb(serial, "shell", "getprop", "ro.build.version.release"),
+      driver.evaluate("({ w: innerWidth, h: innerHeight, dpr: devicePixelRatio })") as Promise<{ w: number; h: number; dpr: number }>,
+    ]);
+    const engine = (version.Browser ?? "Chrome").replace("/", " ");
+    const where = android.app ? `app ${android.app}` : "Chrome";
+    // Sheets and reports are drawn locally.
+    const sheets: Browser = await launchBrowser(options.browser, false);
+    cleanup.push(() => sheets.close());
+
+    const result: GameSession = {
+      url,
+      deviceLabel: `${model} (Android ${release}, ${engine}, ${where}) ${view.w}×${view.h} @${Math.round(view.dpr * 100) / 100}x`,
+      browser: sheets,
+      driver,
+      issues,
+      get during() {
+        return session.during;
+      },
+      set during(value: string) {
+        session.during = value;
+      },
+      close: undo,
+    };
+    return result;
+  } catch (error) {
+    await undo();
+    throw error;
   }
 }

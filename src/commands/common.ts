@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describeDevice, type Device } from "../devices.ts";
+import type { AndroidTarget } from "../android.ts";
+import type { Device } from "../devices.ts";
 import { findMotionIssues, type MotionFinding } from "../motion.ts";
 import type { Finding, ReportImage, RunDir } from "../report.ts";
 import type { StoryItem } from "../runner.ts";
@@ -23,6 +24,8 @@ export interface CommonOptions {
   seed: number | null;
   port?: number;
   fps: number;
+  // Run on a USB-connected Android phone: in Chrome, or inside an app's WebView (--app).
+  android?: AndroidTarget | null;
 }
 
 export function sessionOptions(common: CommonOptions, extra: Partial<SessionOptions> = {}): SessionOptions {
@@ -48,7 +51,7 @@ export interface FilmSheetOptions {
   maxTiles: number;
   boxes: boolean;
   frameMs: number;
-  device: Device;
+  deviceLabel: string;
   title: string;
   // Frames were captured in device pixels and cropped (--zoom): show them larger.
   enlarged?: boolean;
@@ -104,7 +107,7 @@ export async function buildFilmSheet(
   const png = await compositor.sheet({
     title: options.title,
     subtitle: [
-      describeDevice(options.device),
+      options.deviceLabel,
       `${frames.length} frames over ${durationMs} ms (virtual clock, ${Math.round(1000 / options.frameMs)} fps)`,
       stride > 1 ? `showing every ${ordinal(stride)} frame` : "showing every frame",
       options.boxes ? "dashed box = what changed since the previous tile" : "",
@@ -226,7 +229,7 @@ export async function buildCompareSheet(
   film: Film,
   previousDir: string,
   diffs: number[],
-  options: { frameMs: number; device: Device },
+  options: { frameMs: number; deviceLabel: string },
 ): Promise<CompareResult> {
   const tilesDir = join(previousDir, "tiles");
   if (!existsSync(tilesDir)) {
@@ -275,7 +278,7 @@ export async function buildCompareSheet(
   const aspect = film.area.height / Math.max(1, film.area.width);
   const png = await compositor.sheet({
     title: "compare  ·  earlier run (top) vs this run (bottom)",
-    subtitle: `${describeDevice(options.device)}  ·  ${previousDir}  ·  dashed box = where the two differ`,
+    subtitle: `${options.deviceLabel}  ·  ${previousDir}  ·  dashed box = where the two differ`,
     tiles,
     tileHeight: Math.min(film.area.height * 2, aspect > 1.2 ? 520 : aspect > 0.8 ? 400 : 320),
     maxWidth: 1600,
