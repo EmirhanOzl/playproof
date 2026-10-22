@@ -89,7 +89,8 @@ Without it, use `--ready "<js expression>"` or `--wait-for <selector>` for loadi
 
 ## Notes
 
-- The virtual clock covers `requestAnimationFrame`, timers, `performance.now`, `Date`, CSS animations and transitions; `Math.random` is seeded (`--seed`, `--seed off`). Network requests complete before the game sees more time pass, so loading is repeatable too. Audio, video and Web Workers keep real time.
+- The virtual clock covers `requestAnimationFrame`, timers, `performance.now`, `Date`, CSS animations and transitions; `Math.random` is seeded (`--seed`, `--seed off`). Network requests, WebAssembly compilation, decoding and IndexedDB complete before the game sees more time pass, so loading is repeatable too. Audio, video and the inside of Web Workers keep real time.
+- Big engines (Unity, Godot) need a few seconds to start: use `--settle 3s` or more. Settle counts from the start of the game's render loop.
 - `--realtime` (play, monkey) skips the virtual clock when you need real timing.
 - Output goes to `.playproof/<time>-<command>/` (add `.playproof/` to `.gitignore`), or `--out <dir>`.
 - No browser? playproof falls back to an installed Chrome or Edge; `npx playproof install-browser` downloads its own Chromium.

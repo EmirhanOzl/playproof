@@ -128,17 +128,32 @@ export class PlaywrightDriver implements Driver {
   async advance(ms: number, frames = true): Promise<void> {
     if (ms <= 0) return;
     if (this.virtual) {
-      // Frame-sized steps, so a request the game starts mid-wait is answered before the game sees more time pass.
+      // Frame-sized steps, so a request (or WebAssembly compile, or decode) the game starts mid-wait is finished
+      // before the game sees more time pass.
       for (let left = ms; left > 1e-6; left -= this.frameMs) {
-        await this.page.evaluate(
-          ([time, draw]) =>
-            (window as unknown as { __playproofClock: { advance(ms: number, frames: boolean): number } }).__playproofClock.advance(
-              time,
-              draw,
-            ),
-          [Math.min(left, this.frameMs), frames] as const,
-        );
+        let pending = await this.page.evaluate(async ([time, draw]) => {
+          const clock = (window as unknown as { __playproofClock: { advance(ms: number, frames: boolean): number; pending(): number } })
+            .__playproofClock;
+          clock.advance(time, draw);
+          // Let tasks the frame queued (messages, storage callbacks) run before the next frame, so their order
+          // against virtual time does not depend on how fast this machine is. requestIdleCallback is left real.
+          await new Promise((done) => requestIdleCallback(done, { timeout: 50 }));
+          return clock.pending();
+        }, [Math.min(left, this.frameMs), frames] as const);
         if (this.network?.busy()) await this.network.idle();
+        // Work that never finishes (a blocked database open, a stuck decode) must not stall every frame.
+        for (const until = Date.now() + 5000; pending > 0; ) {
+          if (Date.now() > until) {
+            await this.page.evaluate(() =>
+              (window as unknown as { __playproofClock: { abandonPending(): void } }).__playproofClock.abandonPending(),
+            );
+            break;
+          }
+          await new Promise((done) => setTimeout(done, 5));
+          pending = await this.page.evaluate(() =>
+            (window as unknown as { __playproofClock: { pending(): number } }).__playproofClock.pending(),
+          );
+        }
       }
     } else {
       await this.page.waitForTimeout(ms);

@@ -48,7 +48,8 @@
     "check": "npm run typecheck && npm test",
     "prepack": "npm run build",
     "docs:images": "node scripts/docs-images.ts",
-    "docs:icon": "node scripts/icon.ts"
+    "docs:icon": "node scripts/icon.ts",
+    "test:engines": "node scripts/engines.ts"
   },
   "dependencies": {
     "playwright-core": "^1.63.0"

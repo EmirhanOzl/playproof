@@ -1,0 +1,13 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;overflow:hidden}</style>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8.6.6/dist/pixi.min.js"></script></head><body><script>
+(async () => {
+  const app = new PIXI.Application();
+  await app.init({ resizeTo: window, background: "#203040", autoDensity: true, resolution: devicePixelRatio });
+  document.body.appendChild(app.canvas);
+  const g = new PIXI.Graphics().circle(0, 0, 30).fill(0xffcc33);
+  app.stage.addChild(g);
+  let t = 0;
+  app.ticker.add((ticker) => { t += ticker.deltaMS / 1000; g.x = app.screen.width / 2 + Math.cos(t * 3) * 120; g.y = app.screen.height / 2 + Math.sin(t * 3) * 120; });
+  window.pixiReady = true;
+})();
+</script></body></html>

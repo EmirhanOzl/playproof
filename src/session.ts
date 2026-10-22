@@ -249,7 +249,21 @@ async function load(session: Session, options: SessionOptions, network: NetworkT
     if (Date.now() > deadline) throw new UsageError(`The game was not ready after ${options.timeoutMs} ms (waiting for ${describe()}).`);
     await driver.advance(driver.frameMs);
   }
-  if (options.settleMs > 0) await driver.advance(options.settleMs);
+  // Settle counts from the start of the game's render loop once there is one: engines measure their own time from
+  // there, so how long loading took (which can vary with workers and storage) does not shift the scene. The loop
+  // may start during the settle time itself, so the end is recomputed every frame.
+  const clockState = () =>
+    page.evaluate(() => {
+      const clock = (window as unknown as { __playproofClock: { now(): number; loopStartedAt(): number | null } }).__playproofClock;
+      return { now: clock.now(), loopStart: clock.loopStartedAt() };
+    });
+  const begin = (await clockState()).now;
+  for (let guard = 0; guard < 100000; guard++) {
+    const { now, loopStart } = await clockState();
+    const end = (loopStart ?? begin) + options.settleMs;
+    if (now >= end - 1e-6) break;
+    await driver.advance(Math.min(driver.frameMs, end - now));
+  }
   session.during = "idle";
 }
 

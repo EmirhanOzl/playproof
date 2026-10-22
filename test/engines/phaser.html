@@ -1,0 +1,12 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;background:#000}</style>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script></head><body><script>
+class Scene extends Phaser.Scene {
+  create() {
+    this.box = this.add.rectangle(60, 200, 50, 50, 0xffcc33);
+    this.tweens.add({ targets: this.box, x: 340, duration: 1000, ease: "Sine.easeInOut", yoyo: true, repeat: -1 });
+    this.input.on("pointerdown", () => { this.box.fillColor = 0x33ccff; window.tapped = (window.tapped || 0) + 1; });
+    window.phaserReady = true;
+  }
+}
+new Phaser.Game({ type: Phaser.AUTO, width: 400, height: 400, backgroundColor: "#203040", scene: Scene, scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH } });
+</script></body></html>

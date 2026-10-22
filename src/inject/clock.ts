@@ -16,6 +16,13 @@ export interface ClockApi {
   // frames=false models a backgrounded tab: timers still fire but no frames are drawn, so the first frame after
   // it sees the whole gap, as on a real phone.
   advance(ms: number, frames?: boolean): number;
+  // Asynchronous work in flight that finishes in real time (WebAssembly compilation, audio and image decoding).
+  // playproof waits for it before letting more virtual time pass.
+  pending(): number;
+  // Stop waiting for the work in flight now (it may never finish, e.g. a blocked database open).
+  abandonPending(): void;
+  // Virtual time of the first frame of the game's render loop (three frames in a row with callbacks), or null.
+  loopStartedAt(): number | null;
   stats(): { frames: number; rafRequests: number; timers: number };
 }
 
@@ -52,8 +59,14 @@ export function installClock(options: ClockOptions): void {
   window.cancelAnimationFrame = (id: number): void => {
     frameCallbacks.delete(id);
   };
+  let loopStartedAt: number | null = null;
+  let busyFrames = 0;
   const runFrame = (): void => {
     framesRun++;
+    if (loopStartedAt === null) {
+      busyFrames = frameCallbacks.size > 0 ? busyFrames + 1 : 0;
+      if (busyFrames === 3) loopStartedAt = now - 2 * frameMs;
+    }
     const batch = frameCallbacks;
     frameCallbacks = new Map();
     for (const callback of batch.values()) {
@@ -105,6 +118,70 @@ export function installClock(options: ClockOptions): void {
     addTimer(handler, delay, args, true)) as typeof setInterval;
   w.clearTimeout = clearTimer as typeof clearTimeout;
   w.clearInterval = clearTimer as typeof clearInterval;
+
+  // --- asynchronous work that takes real time ------------------------------------------------------------------
+  // An engine that compiles its WebAssembly for 300 ms would otherwise see a different amount of virtual time pass
+  // on a fast and a slow machine, and start its scene at a different moment. Counting this work lets playproof
+  // hold the clock until it is done, as it does for network requests.
+  let pendingWork = 0;
+  let abandoned = 0;
+  const track = <T>(promise: T): T => {
+    if (!promise || typeof (promise as { then?: unknown }).then !== "function") return promise;
+    pendingWork++;
+    let settled = false;
+    const done = (): void => {
+      if (!settled) {
+        settled = true;
+        pendingWork--;
+      }
+    };
+    (promise as unknown as Promise<unknown>).then(done, done);
+    return promise;
+  };
+  const wrap = (owner: object | undefined, name: string): void => {
+    const target = owner as Record<string, unknown> | undefined;
+    const original = target?.[name];
+    if (typeof original !== "function") return;
+    target![name] = function (this: unknown, ...args: unknown[]) {
+      return track((original as (...a: unknown[]) => unknown).apply(this, args));
+    };
+  };
+  const wasm = (globalThis as { WebAssembly?: object }).WebAssembly;
+  for (const name of ["compile", "compileStreaming", "instantiate", "instantiateStreaming"]) wrap(wasm, name);
+  wrap(window, "createImageBitmap");
+  wrap(globalThis.HTMLImageElement?.prototype, "decode");
+  wrap(globalThis.BaseAudioContext?.prototype, "decodeAudioData");
+  // IndexedDB answers through events, not promises (engines cache their data there while loading).
+  const trackEvents = (target: EventTarget, endings: string[]): void => {
+    pendingWork++;
+    let settled = false;
+    const done = (): void => {
+      if (settled) return;
+      settled = true;
+      pendingWork--;
+      for (const name of endings) target.removeEventListener(name, done);
+    };
+    for (const name of endings) target.addEventListener(name, done);
+  };
+  const wrapRequest = (owner: object | undefined, names: string[], endings: string[]): void => {
+    const target = owner as Record<string, unknown> | undefined;
+    for (const name of names) {
+      const original = target?.[name];
+      if (typeof original !== "function") continue;
+      target![name] = function (this: unknown, ...args: unknown[]) {
+        const result = (original as (...a: unknown[]) => unknown).apply(this, args);
+        if (result instanceof EventTarget) trackEvents(result, endings);
+        return result;
+      };
+    }
+  };
+  if (globalThis.IDBFactory) {
+    wrapRequest(IDBFactory.prototype, ["open", "deleteDatabase"], ["success", "error", "blocked"]);
+    wrapRequest(IDBDatabase.prototype, ["transaction"], ["complete", "error", "abort"]);
+    const requests = ["get", "getAll", "getAllKeys", "getKey", "count", "put", "add", "delete", "clear"];
+    wrapRequest(IDBObjectStore.prototype, requests, ["success", "error"]);
+    wrapRequest(IDBIndex.prototype, requests, ["success", "error"]);
+  }
 
   // --- performance.now / Date -----------------------------------------------------------------------------------
   performance.now = () => now;
@@ -181,6 +258,11 @@ export function installClock(options: ClockOptions): void {
       }
       return now;
     },
+    pending: () => Math.max(0, pendingWork - abandoned),
+    abandonPending: () => {
+      abandoned = pendingWork;
+    },
+    loopStartedAt: () => loopStartedAt,
     stats: () => ({ frames: framesRun, rafRequests, timers: timers.size }),
   };
   Object.defineProperty(w, "__playproofClock", { value: api, enumerable: false });

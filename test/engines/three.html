@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{margin:0;overflow:hidden}</style></head><body>
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js";
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+renderer.domElement.style.touchAction = "none";
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x203040);
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 100); camera.position.z = 3;
+const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshNormalMaterial()); scene.add(cube);
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => { const t = clock.getElapsedTime(); cube.rotation.x = t; cube.rotation.y = t * 1.3; renderer.render(scene, camera); });
+window.threeReady = true;
+</script></body></html>

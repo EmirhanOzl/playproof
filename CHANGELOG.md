@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- Determinism for big engines: virtual time also waits for WebAssembly compilation, image and audio decoding and IndexedDB, lets queued browser tasks run between frames, and counts the settle time from the start of the game's render loop. Unity WebGL and Godot 4 web builds now give identical frames run after run, like Phaser, PixiJS and three.js (`npm run test:engines`).
+- Tested on Linux, macOS and Windows in CI.
+
 ## 0.2.0
 
 - `playproof.config.json`: the game's target and defaults, and named scenarios (`--scenario jump`), with a JSON Schema for editor autocompletion.

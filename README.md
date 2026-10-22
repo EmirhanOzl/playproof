@@ -17,7 +17,7 @@ Coding agents can write a web game in minutes, but they can't watch it move. pla
 
 ![A contact sheet of a buggy game: two white flicker frames and a teleporting ball are outlined in red and explained under the chart](docs/images/frames-bugs.png)
 
-Tested with Canvas 2D, WebGL, Phaser, PixiJS and three.js. Anything else that runs in Chromium should work the same way, including Godot and Unity web exports and plain DOM games.
+Tested with Canvas 2D, DOM, Phaser 3, PixiJS 8, three.js, Godot 4 web exports and Unity WebGL builds: two runs of each give identical frames (`npm run test:engines`).
 
 ## Install
 
@@ -243,7 +243,7 @@ Without it, use `--ready "<js expression>"` or `--wait-for <selector>` to wait f
 ## How it works
 
 - **Virtual clock.** Before any game script runs, playproof replaces `requestAnimationFrame`, `setTimeout`/`setInterval`, `performance.now` and `Date`, and stops the CSS animation timeline. Time starts frozen. Advancing it runs timers and frames in exact order at 60 fps, which is why `wait 2s` takes milliseconds and why two runs produce identical frames.
-- **Repeatable loading.** While the page loads, playproof advances frames itself. Whenever the game has network requests in flight, virtual time waits for them, so to the game the network looks instant and a slow connection gives the same frames as a fast one.
+- **Repeatable loading.** While the page loads, playproof advances frames itself. Whenever the game has work in flight that takes real time (network requests, WebAssembly compilation, image and audio decoding, IndexedDB), virtual time waits for it, so a slow machine or connection gives the same frames as a fast one. The settle time counts from the moment the game's render loop starts, which is when engines like Unity and Godot start their own clocks.
 - **Seeded randomness.** `Math.random` is seeded (`--seed`, or `--seed off`).
 - **Real input.** Touch devices get real touch events (with the pointer and mouse events Chrome derives from them); others get mouse events. Key presses are held for a few frames so games that poll input see them.
 - **Images, not logs.** Contact sheets, onion skins, storyboards and charts are drawn in a blank Chromium page, so playproof has a single dependency (`playwright-core`) and no native image libraries.
