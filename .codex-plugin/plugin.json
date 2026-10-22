@@ -1,6 +1,6 @@
 {
   "name": "playproof",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "See and playtest browser games: frame-by-frame contact sheets and onion skins on a virtual clock, scripted play, crash-hunting monkey tests, phone layout checks and frame pacing on desktop or a real Android phone.",
   "author": {
     "name": "Emirhan",

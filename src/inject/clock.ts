@@ -21,6 +21,9 @@ export interface ClockApi {
   pending(): number;
   // Stop waiting for the work in flight now (it may never finish, e.g. a blocked database open).
   abandonPending(): void;
+  // True if the page posted messages, used storage or workers since the last call: tasks may be queued that
+  // should run before the next frame.
+  takeActivity(): boolean;
   // Virtual time of the first frame of the game's render loop (three frames in a row with callbacks), or null.
   loopStartedAt(): number | null;
   stats(): { frames: number; rafRequests: number; timers: number };
@@ -125,8 +128,11 @@ export function installClock(options: ClockOptions): void {
   // hold the clock until it is done, as it does for network requests.
   let pendingWork = 0;
   let abandoned = 0;
+  let activity = 0;
+  let activitySeen = 0;
   const track = <T>(promise: T): T => {
     if (!promise || typeof (promise as { then?: unknown }).then !== "function") return promise;
+    activity++;
     pendingWork++;
     let settled = false;
     const done = (): void => {
@@ -153,6 +159,7 @@ export function installClock(options: ClockOptions): void {
   wrap(globalThis.BaseAudioContext?.prototype, "decodeAudioData");
   // IndexedDB answers through events, not promises (engines cache their data there while loading).
   const trackEvents = (target: EventTarget, endings: string[]): void => {
+    activity++;
     pendingWork++;
     let settled = false;
     const done = (): void => {
@@ -175,6 +182,16 @@ export function installClock(options: ClockOptions): void {
       };
     }
   };
+  // Messages to the page itself, to ports and to workers come back as tasks in real time.
+  for (const owner of [window, globalThis.MessagePort?.prototype, globalThis.Worker?.prototype]) {
+    const target = owner as unknown as Record<string, unknown> | undefined;
+    const original = target?.postMessage;
+    if (typeof original !== "function") continue;
+    target!.postMessage = function (this: unknown, ...args: unknown[]) {
+      activity++;
+      return (original as (...a: unknown[]) => unknown).apply(this, args);
+    };
+  }
   if (globalThis.IDBFactory) {
     wrapRequest(IDBFactory.prototype, ["open", "deleteDatabase"], ["success", "error", "blocked"]);
     wrapRequest(IDBDatabase.prototype, ["transaction"], ["complete", "error", "abort"]);
@@ -261,6 +278,11 @@ export function installClock(options: ClockOptions): void {
     pending: () => Math.max(0, pendingWork - abandoned),
     abandonPending: () => {
       abandoned = pendingWork;
+    },
+    takeActivity: () => {
+      const busy = activity !== activitySeen;
+      activitySeen = activity;
+      return busy;
     },
     loopStartedAt: () => loopStartedAt,
     stats: () => ({ frames: framesRun, rafRequests, timers: timers.size }),

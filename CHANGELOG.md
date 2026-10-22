@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Faster runs: the wait for queued browser tasks between frames only happens when the game posted messages or used storage or workers since the last frame. 0.3.0 waited on every frame, which made long monkey runs several times slower.
+
 ## 0.3.0
 
 - Determinism for big engines: virtual time also waits for WebAssembly compilation, image and audio decoding and IndexedDB, lets queued browser tasks run between frames, and counts the settle time from the start of the game's render loop. Unity WebGL and Godot 4 web builds now give identical frames run after run, like Phaser, PixiJS and three.js (`npm run test:engines`).

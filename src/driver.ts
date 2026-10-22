@@ -132,12 +132,16 @@ export class PlaywrightDriver implements Driver {
       // before the game sees more time pass.
       for (let left = ms; left > 1e-6; left -= this.frameMs) {
         let pending = await this.page.evaluate(async ([time, draw]) => {
-          const clock = (window as unknown as { __playproofClock: { advance(ms: number, frames: boolean): number; pending(): number } })
-            .__playproofClock;
+          const clock = (
+            window as unknown as {
+              __playproofClock: { advance(ms: number, frames: boolean): number; pending(): number; takeActivity(): boolean };
+            }
+          ).__playproofClock;
           clock.advance(time, draw);
-          // Let tasks the frame queued (messages, storage callbacks) run before the next frame, so their order
-          // against virtual time does not depend on how fast this machine is. requestIdleCallback is left real.
-          await new Promise((done) => requestIdleCallback(done, { timeout: 50 }));
+          // If the page posted messages or used storage or workers, let the tasks that queued run before the next
+          // frame, so their order against virtual time does not depend on machine speed. requestIdleCallback is left
+          // real; most games never get here, so they pay nothing for it.
+          if (clock.takeActivity()) await new Promise((done) => requestIdleCallback(done, { timeout: 50 }));
           return clock.pending();
         }, [Math.min(left, this.frameMs), frames] as const);
         if (this.network?.busy()) await this.network.idle();
