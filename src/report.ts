@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import type { Issue } from "./session.ts";
 
 export type Severity = "error" | "warning" | "info";
@@ -21,6 +21,8 @@ export interface Report {
   device: string;
   images: ReportImage[];
   findings: Finding[];
+  // Results of js and until steps, shown in the summary.
+  log?: string[];
   // Command-specific numbers (frame times, step log, ...), kept for --json and report.json.
   data: Record<string, unknown>;
 }
@@ -37,11 +39,15 @@ export class RunDir {
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
     const dir = resolve(out ?? join(".playproof", `${stamp}-${command}`));
     mkdirSync(dir, { recursive: true });
+    // Keeps runs out of git without touching the project's own .gitignore.
+    const ignore = join(out === undefined ? resolve(".playproof") : dir, ".gitignore");
+    if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
     return new RunDir(dir);
   }
 
   write(name: string, data: Buffer | string): string {
     const path = join(this.dir, name);
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, data);
     return path;
   }
@@ -65,6 +71,7 @@ export class RunDir {
       `device  ${report.device}`,
       ...report.images.map((image) => `image   ${show(image.path)}  (${image.label})`),
       `report  ${show(join(this.dir, "report.json"))}`,
+      ...(report.log ?? []).map((line) => `log     ${line}`),
     ];
     if (findings.length) lines.push("");
     for (const finding of findings) {

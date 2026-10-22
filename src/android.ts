@@ -79,8 +79,18 @@ export async function openAndroidTab(url: string, wantedSerial: string | null, s
 
   const cleanup: (() => Promise<unknown>)[] = [];
   const undo = async (): Promise<void> => {
-    for (const step of cleanup.reverse()) await step().catch(() => {});
+    for (const step of cleanup.splice(0).reverse()) await step().catch(() => {});
   };
+  // Ctrl+C must still close our tab and remove the port forwards on the phone.
+  const onSignal = (): void => {
+    void undo().finally(() => process.exit(130));
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  cleanup.push(async () => {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  });
   try {
     const target = new URL(url);
     if (["localhost", "127.0.0.1", "[::1]"].includes(target.hostname)) {
@@ -88,23 +98,29 @@ export async function openAndroidTab(url: string, wantedSerial: string | null, s
       await adb(serial, "reverse", `tcp:${port}`, `tcp:${port}`);
       cleanup.push(() => adb(serial, "reverse", "--remove", `tcp:${port}`));
     }
+    await ensureChromeDebuggable(serial);
     const local = await freePort();
     await adb(serial, "forward", `tcp:${local}`, "localabstract:chrome_devtools_remote");
     cleanup.push(() => adb(serial, "forward", "--remove", `tcp:${local}`));
     const devtools = `http://127.0.0.1:${local}`;
 
-    const version = (await fetchJson(`${devtools}/json/version`, "GET").catch(() => {
-      throw new UsageError("Chrome on the phone did not answer. Open Chrome on the phone once, keep the screen on, and retry.");
+    const version = (await fetchJson(`${devtools}/json/version`).catch(() => {
+      throw new UsageError("Chrome on the phone did not answer. Keep the screen on and unlocked, and retry.");
     })) as { Browser?: string };
     const [model, android] = await Promise.all([
       adb(serial, "shell", "getprop", "ro.product.model"),
       adb(serial, "shell", "getprop", "ro.build.version.release"),
     ]);
 
-    const tab = (await fetchJson(`${devtools}/json/new?about:blank`, "PUT")) as { id: string; webSocketDebuggerUrl: string };
-    cleanup.push(() => fetchJson(`${devtools}/json/close/${tab.id}`, "GET").catch(() => {}));
-    const cdp = await CdpConnection.connect(tab.webSocketDebuggerUrl);
+    // Android Chrome refuses /json/new; the browser-level DevTools socket can still open (and close) a tab.
+    const browser = await CdpConnection.connect(`ws://127.0.0.1:${local}/devtools/browser`);
+    cleanup.push(async () => browser.close());
+    const { targetId } = (await browser.send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
+    cleanup.push(() => browser.send("Target.closeTarget", { targetId }));
+    const cdp = await CdpConnection.connect(`ws://127.0.0.1:${local}/devtools/page/${targetId}`);
     cleanup.push(async () => cdp.close());
+    // A background tab draws no frames and cannot be screenshotted.
+    await browser.send("Target.activateTarget", { targetId });
 
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
@@ -122,8 +138,23 @@ export async function openAndroidTab(url: string, wantedSerial: string | null, s
   }
 }
 
-async function fetchJson(url: string, method: "GET" | "PUT"): Promise<unknown> {
-  const response = await fetch(url, { method, signal: AbortSignal.timeout(10000) });
+// Chrome only opens its DevTools socket while it is in the foreground. If the socket is missing, bring Chrome to
+// the front (it shows whatever tab was last open; nothing is read from it) and wait for the socket.
+async function ensureChromeDebuggable(serial: string): Promise<void> {
+  const hasSocket = async () => /@chrome_devtools_remote\b/.test(await adb(serial, "shell", "cat", "/proc/net/unix"));
+  if (await hasSocket()) return;
+  await adb(serial, "shell", "am", "start", "-n", "com.android.chrome/com.google.android.apps.chrome.Main").catch(() => "");
+  for (let i = 0; i < 20; i++) {
+    await new Promise((done) => setTimeout(done, 500));
+    if (await hasSocket()) return;
+  }
+  throw new UsageError(
+    "Chrome on the phone does not accept DevTools connections. Make sure Chrome is installed, the screen is on and unlocked, and USB debugging is allowed.",
+  );
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
   const text = await response.text();
   try {
     return JSON.parse(text);
@@ -171,10 +202,24 @@ class CdpConnection {
     });
   }
 
-  send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  // Every call has a deadline: a phone that locks or a tab that stalls must end the run, not hang it.
+  send(method: string, params: Record<string, unknown> = {}, timeoutMs = 30000): Promise<unknown> {
     const id = this.nextId++;
     return new Promise((done, fail) => {
-      this.pending.set(id, { done, fail });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        fail(new Error(`${method} got no answer from the phone in ${timeoutMs / 1000} s (screen locked?)`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        done: (value) => {
+          clearTimeout(timer);
+          done(value);
+        },
+        fail: (error) => {
+          clearTimeout(timer);
+          fail(error);
+        },
+      });
       this.socket.send(JSON.stringify({ id, method, params }));
     });
   }

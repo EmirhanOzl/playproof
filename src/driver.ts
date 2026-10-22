@@ -28,7 +28,8 @@ export interface Driver {
   typeText(text: string): Promise<void>;
   click(selector: string): Promise<void>;
   evaluate(expression: string): Promise<unknown>;
-  screenshot(clip: Rect | null): Promise<Buffer>;
+  // detailed: device pixels instead of CSS pixels (sharper crops when zooming in).
+  screenshot(clip: Rect | null, detailed?: boolean): Promise<Buffer>;
   targets(): Promise<HookTarget[]>;
   state(): Promise<unknown>;
   setVisibility(hidden: boolean): Promise<void>;
@@ -194,9 +195,15 @@ export class PlaywrightDriver implements Driver {
     }, expression);
   }
 
-  screenshot(clip: Rect | null): Promise<Buffer> {
+  screenshot(clip: Rect | null, detailed = false): Promise<Buffer> {
     const usable = clip && clip.width >= 1 && clip.height >= 1 ? clip : undefined;
-    return this.page.screenshot({ clip: usable, scale: "css", animations: "allow", caret: "hide", timeout: 15000 });
+    return this.page.screenshot({
+      clip: usable,
+      scale: detailed ? "device" : "css",
+      animations: "allow",
+      caret: "hide",
+      timeout: 15000,
+    });
   }
 
   targets(): Promise<HookTarget[]> {

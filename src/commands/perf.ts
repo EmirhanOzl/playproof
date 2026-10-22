@@ -1,4 +1,6 @@
+import type { Browser } from "playwright-core";
 import { openAndroidTab } from "../android.ts";
+import { launchBrowser } from "../browser.ts";
 import { describeDevice } from "../devices.ts";
 import type { Driver } from "../driver.ts";
 import { issueFindings, RunDir, type Finding, type Report, type ReportImage } from "../report.ts";
@@ -74,11 +76,13 @@ export async function perfCommand(options: PerfOptions): Promise<Report & { run:
 async function perfAndroid(options: PerfOptions, run: RunDir): Promise<Report & { run: RunDir }> {
   const target = await openTarget(options.target, options.port);
   const serial = options.android === true ? null : options.android;
-  const tab = await openAndroidTab(target.url, serial, Math.max(options.settleMs, 1000), options.timeoutMs);
-  const { launchBrowser } = await import("../browser.ts");
-  const browser = await launchBrowser(options.browser, false);
-  const compositor = await Compositor.open(browser);
+  let tab: Awaited<ReturnType<typeof openAndroidTab>> | null = null;
+  let browser: Browser | null = null;
+  let compositor: Compositor | null = null;
   try {
+    tab = await openAndroidTab(target.url, serial, Math.max(options.settleMs, 1000), options.timeoutMs);
+    browser = await launchBrowser(options.browser, false);
+    compositor = await Compositor.open(browser);
     const { data, heapStart, heapEnd, image, errors } = await measure(tab.driver, options, null);
     const { phone } = tab;
     return await finishReport(run, compositor, options, data, {
@@ -92,9 +96,9 @@ async function perfAndroid(options: PerfOptions, run: RunDir): Promise<Report & 
       caveat: null,
     });
   } finally {
-    await compositor.close();
-    await browser.close().catch(() => {});
-    await tab.close();
+    await compositor?.close();
+    await browser?.close().catch(() => {});
+    await tab?.close();
     await target.close();
   }
 }
@@ -231,7 +235,7 @@ async function finishReport(
   const png = await compositor.sheet({
     title: `perf  ·  ${stats.fps} fps  ·  p95 ${stats.p95} ms  ·  ${stats.droppedPercent}% dropped`,
     subtitle: `${context.device}  ·  ${context.where}  ·  ${formatTime(data.durationMs)} ${activity}`,
-    tiles: [{ image: context.image, caption: "screen at the end of the run" }],
+    tiles: [{ image: context.image, caption: "end of the run" }],
     tileHeight: 260,
     maxWidth: 1400,
     graph: {

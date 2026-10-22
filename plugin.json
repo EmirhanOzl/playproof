@@ -1,0 +1,25 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "playproof",
+  "version": "0.1.0",
+  "description": "See and playtest browser games: frame-by-frame contact sheets and onion skins on a virtual clock, scripted play, crash-hunting monkey tests, phone layout checks and frame pacing on desktop or a real Android phone.",
+  "author": {
+    "name": "Emirhan",
+    "url": "https://github.com/EmirhanOzl"
+  },
+  "homepage": "https://github.com/EmirhanOzl/playproof",
+  "repository": "https://github.com/EmirhanOzl/playproof",
+  "license": "MIT",
+  "keywords": [
+    "gamedev",
+    "html5",
+    "canvas",
+    "webgl",
+    "phaser",
+    "threejs",
+    "playtest",
+    "animation",
+    "testing",
+    "skills"
+  ]
+}

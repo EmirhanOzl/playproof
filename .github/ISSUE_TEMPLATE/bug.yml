@@ -1,0 +1,26 @@
+name: Bug report
+description: playproof did something wrong, or missed something it should have caught
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what you got. Paste the summary playproof printed.
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Game engine or framework
+      placeholder: Canvas 2D, Phaser 3, three.js, PixiJS, Godot web export, ...
+  - type: textarea
+    id: repro
+    attributes:
+      label: A page that shows it
+      description: A link, or a small HTML file. Bugs with a page that reproduces them get fixed first.
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: playproof 0.1.0, Node 22.18, Windows 11 / macOS 15 / Ubuntu 24.04, browser

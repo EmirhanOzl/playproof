@@ -6,11 +6,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { captureCommand } from "./commands/capture.ts";
-import type { CommonOptions } from "./commands/common.ts";
+import { parseZoom, type CommonOptions } from "./commands/common.ts";
 import { devicesCommand } from "./commands/devices.ts";
 import { monkeyCommand } from "./commands/monkey.ts";
 import { perfCommand } from "./commands/perf.ts";
 import { skillCommand } from "./commands/skill.ts";
+import { runMcpServer } from "./mcp.ts";
 import { DESKTOP, resolveDevice } from "./devices.ts";
 import type { Report } from "./report.ts";
 import type { RunDir } from "./report.ts";
@@ -32,6 +33,8 @@ Commands
   perf <target>      Measure real frame pacing (fps, p95/p99, dropped frames, long tasks), locally or on a
                      USB-connected Android phone with --android.
   skill install      Install the agent skill for Claude Code, Codex, Cursor, Gemini CLI and OpenCode.
+  mcp                Run as an MCP server over stdio (for Claude Desktop and other MCP clients); tools
+                     return the images directly.
   install-browser    Download the Chromium build this version of playproof is tested with
                      (optional: an installed Chrome or Edge is used when it is missing).
 
@@ -59,6 +62,9 @@ frames
   --full               Film the whole viewport instead of the game area
   --no-boxes           Do not outline what changed between tiles
   --save-frames        Also write every frame as a PNG
+  --compare <dir>      Compare with an earlier frames run (its output folder), frame by frame
+  --zoom <auto|x,y,w,h> Crop to what moves (auto) or to a region in percent of the game area,
+                       captured at full device resolution
 
 play
   --do <steps> | --script <file>   The script (see Steps below)
@@ -119,6 +125,8 @@ const OPTIONS = {
   background: { type: "boolean", default: true },
   "keep-going": { type: "boolean" },
   devices: { type: "string" },
+  compare: { type: "string" },
+  zoom: { type: "string" },
   cpu: { type: "string" },
   monkey: { type: "boolean" },
   android: { type: "boolean" },
@@ -148,6 +156,10 @@ async function main(argv: string[]): Promise<number> {
     return command || v.help ? 0 : 2;
   }
 
+  if (command === "mcp") {
+    await runMcpServer(version());
+    return 0;
+  }
   if (command === "skill") {
     console.log(skillCommand(rest, { project: Boolean(v.project), agent: v.agent }));
     return 0;
@@ -190,6 +202,8 @@ async function main(argv: string[]): Promise<number> {
         fullView: Boolean(v.full),
         realtime: false,
         saveFrames: Boolean(v["save-frames"]),
+        compare: v.compare,
+        zoom: v.zoom ? parseZoom(v.zoom) : undefined,
       });
       break;
     case "play": {
@@ -203,6 +217,7 @@ async function main(argv: string[]): Promise<number> {
         fullView: Boolean(v.full),
         realtime: Boolean(v.realtime),
         saveFrames: false,
+        zoom: v.zoom ? parseZoom(v.zoom) : undefined,
       });
       break;
     }
@@ -268,7 +283,7 @@ main(process.argv.slice(2)).then(
     process.exitCode = code;
   },
   (error: unknown) => {
-    if (error instanceof UsageError || (error as { code?: string }).code?.startsWith("ERR_PARSE_ARGS")) {
+    if (error instanceof UsageError || String((error as { code?: unknown })?.code ?? "").startsWith("ERR_PARSE_ARGS")) {
       console.error(`playproof: ${(error as Error).message}`);
     } else {
       console.error(`playproof failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);

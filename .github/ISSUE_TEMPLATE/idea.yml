@@ -1,0 +1,16 @@
+name: Idea
+description: A check, command or engine you would like playproof to handle
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to see or catch?
+      description: Describe the game problem first; the feature second.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: An example
+      description: A game, a screenshot, or a description of the bug you wish playproof had caught.

@@ -1,32 +1,119 @@
+<div align="center">
+
+<img src=".claude-plugin/icon.png" alt="" width="96">
+
 # playproof
 
-**Eyes and hands for browser games.** playproof lets coding agents (and you) see a web game move frame by frame, play it with scripted input, hunt for crashes, check it on phone screens and measure its frame pacing. Everything comes back as images made to be read, plus a short text summary.
+**Eyes and hands for browser games.**
 
-```sh
-npx playproof frames http://localhost:5173 --device "Pixel 8" --do "tap @Play; wait 400ms; key Space" --duration 700ms
-```
+[![npm](https://img.shields.io/npm/v/playproof?color=45d39b)](https://www.npmjs.com/package/playproof)
+[![CI](https://github.com/EmirhanOzl/playproof/actions/workflows/ci.yml/badge.svg)](https://github.com/EmirhanOzl/playproof/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522.18-5fa04e)](https://nodejs.org)
 
-![A contact sheet of a jump: 14 tiles over 700 ms, dashed boxes around what moved, and a bar per frame showing how much of the screen changed](docs/images/frames-jump.png)
+</div>
+
+Coding agents can write a web game in minutes, but they can't watch it move. playproof lets them (and you) see a game frame by frame, play it with scripted input, hunt for crashes, check it on phone screens and measure how smoothly it runs, on desktop or on a real Android phone. Everything comes back as images made to be read, with a short summary that points at what looks wrong.
+
+![A contact sheet of a buggy game: two white flicker frames and a teleporting ball are outlined in red and explained under the chart](docs/images/frames-bugs.png)
 
 Tested with Canvas 2D, WebGL, Phaser, PixiJS and three.js. Anything else that runs in Chromium should work the same way, including Godot and Unity web exports and plain DOM games.
 
+## Install
+
+### Ask your agent
+
+Paste this into Claude Code, Codex, Cursor, Gemini CLI or any other coding agent:
+
+```text
+Install playproof from https://github.com/EmirhanOzl/playproof
+```
+
+It will pick the right command below for itself.
+
+### Claude Code
+
+```bash
+claude plugin marketplace add EmirhanOzl/playproof
+claude plugin install playproof@playproof
+```
+
+### Codex
+
+```bash
+codex plugin marketplace add EmirhanOzl/playproof
+codex plugin add playproof@playproof
+```
+
+### Gemini CLI
+
+```bash
+gemini extensions install https://github.com/EmirhanOzl/playproof
+```
+
+### Cursor, OpenCode, GitHub Copilot and other agents
+
+```bash
+npx skills add EmirhanOzl/playproof
+```
+
+### Claude Desktop and other MCP apps
+
+For apps that call tools instead of running commands, playproof is also an MCP server whose tools return the images directly. Add it to the app's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "playproof": { "command": "npx", "args": ["-y", "playproof", "mcp"] }
+  }
+}
+```
+
+### Without an agent
+
+Nothing to install. Run it with `npx`, pointing it at a dev server, a build folder or an HTML file:
+
+```sh
+npx playproof frames http://localhost:5173 --device "Pixel 8" --do "tap 50%,50%" --duration 1s
+```
+
+playproof uses your installed Chrome or Edge. `npx playproof install-browser` downloads its own Chromium if you prefer.
+
 ## Why
 
-An agent can write a canvas game in minutes, but it can't watch it. A screenshot catches one random instant, so the things that make a game feel broken stay invisible: a jump without anticipation, a sprite that teleports, a one-frame flicker, a button that does nothing, a crash after a hundred taps, a canvas that is blurry on every phone.
+A screenshot catches one random instant, so the things that make a game feel broken stay invisible: a jump without anticipation, a sprite that teleports, a one-frame flicker, a button that does nothing, a crash after a hundred taps, a canvas that is blurry on every phone.
 
-playproof runs the game on a **virtual clock**. Time only moves when playproof moves it, one exact frame at a time, so it can film any moment and every run gives the same pixels. Then it lays the frames out where a model (or a person) can actually look at them, and points at what looks wrong.
+playproof runs the game on a **virtual clock**. Time only moves when playproof moves it, one exact frame at a time, so it can film any moment and every run gives the same pixels. Then it lays the frames out where a model (or a person) can actually look at them. Because runs repeat exactly, an agent can film a motion, change the code, film it again and see precisely what its change did.
 
-## Commands
+## What it does
 
 ### `frames`: watch an animation
 
-Films the game on the virtual clock and builds a contact sheet. A dashed box shows what changed since the previous tile, and the bar chart shows how much of the screen changed in every frame. playproof flags **sudden jumps** (teleports, missing tweens), **one-frame flicker** (draw-order bugs, half-updated state), **holds** (stalls) and **nothing moving at all**.
+Films the game frame by frame and builds a contact sheet: dashed boxes show what changed since the previous tile, and the bar chart shows how much of the screen changed in every frame. playproof flags **sudden jumps** (teleports, missing tweens), **one-frame flicker** (draw-order bugs, half-updated state), **holds** (stalls) and **nothing moving at all**.
 
 ```sh
-npx playproof frames ./dist --device "Pixel 8" --duration 1.2s
+npx playproof frames ./dist --device "Pixel 8" --do "tap @Play; wait 400ms; key Space" --duration 700ms
 ```
 
-![Contact sheet of a buggy game: two white flicker frames and a teleporting ball are outlined in red and explained under the chart](docs/images/frames-bugs.png)
+![Contact sheet of a jump: 14 tiles over 700 ms with dashed boxes around what moved, and a bar per frame](docs/images/frames-jump.png)
+
+Add `--zoom auto` when the thing that moves is small: playproof captures at full device resolution and crops every frame to where most of the motion happens, so a character's squash and stretch fill the tiles.
+
+It also draws an **onion skin**: the whole motion in one picture, oldest moments faintest. The gaps between the ghosts are the easing (wide gaps are fast, tight gaps are slow), which is exactly what animators look at to judge an arc, an anticipation or an overshoot.
+
+<img src="docs/images/onion-jump.png" alt="Onion skin of the jump: ghosts bunch up near the top of the arc, where the character slows down" width="360">
+
+### `frames --compare`: see what a change did
+
+Film, change the code, film again with `--compare <earlier run>`. Every sampled frame of the earlier run sits above the same frame now, with the differences outlined, and the earlier run's motion is drawn as a line over the new bars. Because runs are deterministic, "identical" means identical.
+
+```sh
+npx playproof frames http://localhost:5173 --do "tap @Play; key Space" --out .playproof/before
+# ...change the jump...
+npx playproof frames http://localhost:5173 --do "tap @Play; key Space" --compare .playproof/before
+```
+
+![Before and after a snappier jump: the new frames reach the top sooner and land earlier](docs/images/compare-jump.png)
 
 ### `play`: run a script, get a storyboard
 
@@ -54,7 +141,7 @@ ERROR   Uncaught error: TypeError: Cannot read properties of undefined (reading 
 
 ### `devices`: phones, tablet and desktop side by side
 
-Loads the game on nine screens (small and tall phones, a landscape phone, a tablet, a desktop) and checks for the layout bugs that only show up there: **blurry canvas** (no devicePixelRatio scaling), **stretched canvas**, canvas cut off, page scrolling, missing viewport meta, missing `touch-action: none`, clipped text and tiny touch targets. The same problem on several devices is reported once.
+Loads the game on nine screens and checks for the layout bugs that only show up there: **blurry canvas** (no devicePixelRatio scaling), **stretched canvas**, canvas cut off, page scrolling, missing viewport meta, missing `touch-action: none`, clipped text and tiny touch targets. The same problem on several devices is reported once.
 
 ```sh
 npx playproof devices http://localhost:5173
@@ -62,38 +149,18 @@ npx playproof devices http://localhost:5173
 
 ![Six devices side by side; the stretched ball on landscape and desktop is obvious, and findings are listed underneath](docs/images/devices.png)
 
-### `perf`: frame pacing
+### `perf`: frame pacing, locally or on a real phone
 
-Measures real frame times while the game idles, runs a script (`--do`) or takes random taps (`--monkey`): fps, p95/p99, dropped frames against the display's refresh rate, long main-thread tasks and heap growth. Locally the CPU is slowed 4× to approximate a mid-range phone. With `--android` it measures **Chrome on a USB-connected Android phone** instead.
+Measures real frame times while the game idles, runs a script (`--do`) or takes random taps (`--monkey`): fps, p95/p99, dropped frames against the display's refresh rate, long main-thread tasks and heap growth. Locally the CPU is slowed 4× to approximate a mid-range phone. With `--android` it measures **Chrome on a USB-connected Android phone**; localhost is forwarded to the phone automatically.
 
 ```sh
 npx playproof perf ./dist --duration 10s --monkey
-npx playproof perf http://localhost:5173 --android   # localhost is forwarded to the phone over USB
+npx playproof perf http://localhost:5173 --android
 ```
 
 ![Frame-time chart with most bars over the 16.7 ms budget line, marked red](docs/images/perf.png)
 
-On a phone, playproof opens its own tab, talks only to that tab, and closes it afterwards. It never lists or reads your other tabs.
-
-## Use it from your coding agent
-
-playproof ships an [Agent Skill](skills/playproof/SKILL.md) that teaches the agent when to use each command, how to read the images, and what good game feel looks like on a contact sheet.
-
-```sh
-npx playproof skill install            # ~/.claude/skills and ~/.agents/skills
-npx playproof skill install --project  # this repository only
-```
-
-`~/.claude/skills` is read by Claude Code. `~/.agents/skills` is read by Codex, Cursor, Gemini CLI, OpenCode and GitHub Copilot.
-
-In Claude Code you can also install it as a plugin:
-
-```
-/plugin marketplace add EmirhanOzl/playproof
-/plugin install playproof@playproof
-```
-
-After that, asking the agent to "make the jump feel better" or "check this on phones" ends with it opening a contact sheet instead of guessing.
+On a phone, playproof opens its own tab, talks only to that tab and closes it afterwards. It never lists or reads your other tabs.
 
 ## Steps
 
@@ -136,19 +203,19 @@ Without it, use `--ready "<js expression>"` or `--wait-for <selector>` to wait f
 - **Repeatable loading.** While the page loads, playproof advances frames itself. Whenever the game has network requests in flight, virtual time waits for them, so to the game the network looks instant and a slow connection gives the same frames as a fast one.
 - **Seeded randomness.** `Math.random` is seeded (`--seed`, or `--seed off`).
 - **Real input.** Touch devices get real touch events (with the pointer and mouse events Chrome derives from them); others get mouse events. Key presses are held for a few frames so games that poll input see them.
-- **Images, not logs.** Contact sheets, storyboards and charts are drawn in a blank Chromium page, so playproof has a single dependency (`playwright-core`) and no native image libraries.
+- **Images, not logs.** Contact sheets, onion skins, storyboards and charts are drawn in a blank Chromium page, so playproof has a single dependency (`playwright-core`) and no native image libraries.
 
 ## Output
 
-Each run writes to `.playproof/<time>-<command>/` (or `--out <dir>`): the images, `report.json` with all the numbers (per-frame motion, step log, frame times) and `summary.txt`. Add `.playproof/` to your `.gitignore`. `--json` prints the report instead of the summary.
+Each run writes to `.playproof/<time>-<command>/` (or `--out <dir>`): the images, `report.json` with all the numbers (per-frame motion, step log, frame times), `summary.txt`, and the sampled frames in `tiles/` for later comparisons. Add `.playproof/` to your `.gitignore`. `--json` prints the report instead of the summary.
 
-Exit codes: `0` nothing serious found, `1` errors found (crashes, failed requests, failed steps), `2` playproof itself could not run. That makes `monkey` and `devices` usable as CI checks.
+Exit codes: `0` nothing serious found, `1` errors found (crashes, failed requests, failed steps, frame drops on a real phone), `2` playproof itself could not run. That makes `monkey` and `devices` usable as CI checks.
 
 ## Requirements
 
 - Node.js 22.18 or newer.
-- A Chromium-based browser. playproof uses your installed Chrome or Edge if it has nothing else; `npx playproof install-browser` downloads the exact Chromium build it is tested with. Choose one with `--browser chromium|chrome|msedge|<path>`.
-- For `perf --android`: `adb` (Android platform-tools) and a phone with USB debugging enabled.
+- A Chromium-based browser: your installed Chrome or Edge, or `npx playproof install-browser`. Pick one with `--browser chromium|chrome|msedge|<path>`.
+- For `perf --android`: `adb` (Android platform-tools), a phone with USB debugging allowed, the screen on and unlocked.
 
 ## Limitations
 

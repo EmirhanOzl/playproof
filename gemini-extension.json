@@ -1,0 +1,5 @@
+{
+  "name": "playproof",
+  "version": "0.1.0",
+  "description": "See and playtest browser games: frame-by-frame contact sheets and onion skins on a virtual clock, scripted play, crash-hunting monkey tests, phone layout checks and frame pacing on desktop or a real Android phone."
+}

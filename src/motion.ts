@@ -13,7 +13,7 @@ const STILL = 0.02;
 
 // Heuristics, not verdicts: a pop may be an intended cut and a one-frame flash may be a deliberate hit flash. They are
 // worded as things to look at, with the frame numbers that point at the right tiles.
-export function findMotionIssues(data: MotionData, frameMs: number): MotionFinding[] {
+export function findMotionIssues(data: Pick<MotionData, "diffs" | "skips">, frameMs: number): MotionFinding[] {
   const { diffs, skips } = data;
   const findings: MotionFinding[] = [];
   const at = (frame: number): string => `${Math.round((frame + 1) * frameMs)} ms`;

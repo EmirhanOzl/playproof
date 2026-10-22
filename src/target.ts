@@ -71,7 +71,13 @@ export async function openTarget(input: string, port = 0): Promise<Target> {
   return {
     url: `http://127.0.0.1:${actualPort}/${encodeURI(entry)}${suffix}`,
     servedPort: actualPort,
-    close: () => new Promise<void>((done) => server.close(() => done())),
+    close: () =>
+      new Promise<void>((done) => {
+        server.close(() => done());
+        // A browser keeps idle keep-alive connections open (a phone over adb reverse never lets go); without this,
+        // close() would wait for them forever.
+        server.closeAllConnections();
+      }),
   };
 }
 

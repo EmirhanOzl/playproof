@@ -4,7 +4,20 @@ import { runSteps, type StoryItem } from "../runner.ts";
 import { openSession } from "../session.ts";
 import { Compositor } from "../sheet.ts";
 import type { Step } from "../steps.ts";
-import { buildFilmSheet, buildStoryboard, formatTime, imageList, motionToFindings, sessionOptions, type CommonOptions } from "./common.ts";
+import {
+  buildCompareSheet,
+  buildFilmSheet,
+  buildOnion,
+  buildStoryboard,
+  formatTime,
+  imageList,
+  motionToFindings,
+  sessionOptions,
+  tileName,
+  zoomFilm,
+  type CommonOptions,
+  type Zoom,
+} from "./common.ts";
 
 export interface CaptureOptions extends CommonOptions {
   steps: Step[];
@@ -16,6 +29,9 @@ export interface CaptureOptions extends CommonOptions {
   fullView: boolean;
   realtime: boolean;
   saveFrames: boolean;
+  // Folder of an earlier frames run to compare the first film with.
+  compare?: string;
+  zoom?: Zoom;
 }
 
 // `frames` and `play` share this: run the steps, then render films as contact sheets and everything as a storyboard.
@@ -36,6 +52,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
   try {
     const result = await runSteps(session.driver, steps, {
       fullView: options.fullView,
+      detailedFilms: Boolean(options.zoom),
       onStep: (index, step) => {
         session.during = `step ${index + 1}: ${step.source}`;
       },
@@ -48,23 +65,50 @@ export async function captureCommand(command: "frames" | "play", options: Captur
     const films = result.items.filter((item): item is Extract<StoryItem, { kind: "film" }> => item.kind === "film");
     const filmData: Record<string, unknown>[] = [];
 
-    for (const [n, film] of films.entries()) {
+    for (const [n, captured] of films.entries()) {
       const label = films.length === 1 ? "film" : `film ${n + 1}`;
+      let film = captured;
+      let zoomRegion: { x: number; y: number; width: number; height: number } | null = null;
+      if (options.zoom) {
+        const zoomed = await zoomFilm(compositor, captured, options.zoom);
+        if (zoomed) {
+          film = zoomed.film;
+          const r = zoomed.region;
+          zoomRegion = r;
+          const pct = (v: number) => Math.round(v * 100);
+          film = { ...film, label: `${film.label}, zoomed to ${pct(r.x)},${pct(r.y)},${pct(r.width)},${pct(r.height)}% of the game area` };
+        } else {
+          film = { ...captured, label: `${captured.label} (no zoom: the motion fills most of the game area)` };
+        }
+      }
       const sheet = await buildFilmSheet(compositor, film, {
         maxTiles: options.maxTiles,
         boxes: options.boxes,
         frameMs: session.driver.frameMs,
         device: options.device,
         title: `${command === "frames" ? "frames" : label}  ·  ${film.label}`,
+        enlarged: film !== captured,
       });
       const name = films.length === 1 ? "frames.png" : `film-${n + 1}.png`;
       imageList(images, run, name, `${label}: contact sheet, ${sheet.tiles.length} of ${film.frames.length} frames`, sheet.png);
+      const onion = await buildOnion(compositor, film, session.driver.frameMs, `onion skin  ·  ${film.label}`);
+      imageList(images, run, name.replace(".png", "-onion.png").replace("frames-onion", "onion"), `${label}: onion skin, the whole motion in one picture`, onion);
       findings.push(...motionToFindings(sheet.findings, label));
+      if (n === 0) for (const index of sheet.tiles) run.write(tileName(index), film.frames[index]!.image);
+      if (n === 0 && options.compare) {
+        const compared = await buildCompareSheet(compositor, film, options.compare, sheet.diffs, {
+          frameMs: session.driver.frameMs,
+          device: options.device,
+        });
+        imageList(images, run, "compare.png", "this run against the earlier one, frame by frame", compared.png);
+        findings.push(compared.finding);
+      }
       filmData.push({
         label,
         step: film.step + 1,
         frames: film.frames.length,
         tiles: sheet.tiles.map((i) => i + 1),
+        zoom: zoomRegion,
         screenChangePerFrame: sheet.diffs,
       });
       if (options.saveFrames) {
@@ -112,6 +156,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
       device: describeDevice(options.device),
       images,
       findings,
+      log: result.log,
       data: {
         steps: steps.map((step) => step.source),
         elapsedMs: Math.round(result.elapsedMs),

@@ -21,6 +21,8 @@ export interface RunResult {
 export interface RunOptions {
   // Screenshot the game area (default) or the whole viewport.
   fullView: boolean;
+  // Capture films in device pixels, so they can be cropped and enlarged (--zoom).
+  detailedFilms?: boolean;
   onStep?: (index: number, step: Step) => void;
 }
 
@@ -100,12 +102,13 @@ export async function runSteps(driver: Driver, steps: Step[], options: RunOption
           break;
         case "film": {
           const area = (await clip()) ?? { x: 0, y: 0, ...(await driver.viewport()) };
-          const baseline = await driver.screenshot(area);
+          const detailed = Boolean(options.detailedFilms);
+          const baseline = await driver.screenshot(area, detailed);
           const frames: Frame[] = [];
           const count = Math.max(1, Math.round(step.ms / driver.frameMs));
           for (let f = 0; f < count; f++) {
             await pass(driver.frameMs);
-            frames.push({ image: await driver.screenshot(area), time: elapsed });
+            frames.push({ image: await driver.screenshot(area, detailed), time: elapsed });
           }
           items.push({ kind: "film", label: step.source, baseline, frames, fps: step.fps, step: index, area });
           break;

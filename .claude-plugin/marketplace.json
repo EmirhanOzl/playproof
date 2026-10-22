@@ -4,14 +4,27 @@
     "name": "Emirhan"
   },
   "metadata": {
-    "description": "playproof: eyes and hands for browser games"
+    "description": "See and playtest browser games"
   },
   "plugins": [
     {
       "name": "playproof",
-      "description": "See and playtest browser games: frame-by-frame contact sheets on a virtual clock, scripted play, crash-hunting monkey tests, phone layout checks and frame pacing.",
       "source": "./",
-      "category": "development"
+      "description": "See and playtest browser games: frame-by-frame contact sheets and onion skins on a virtual clock, scripted play, crash-hunting monkey tests, phone layout checks and frame pacing on desktop or a real Android phone.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Emirhan"
+      },
+      "homepage": "https://github.com/EmirhanOzl/playproof",
+      "repository": "https://github.com/EmirhanOzl/playproof",
+      "license": "MIT",
+      "category": "development",
+      "tags": [
+        "gamedev",
+        "playtest",
+        "animation",
+        "testing"
+      ]
     }
   ]
 }
