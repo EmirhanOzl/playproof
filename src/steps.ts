@@ -25,6 +25,8 @@ export type Step =
   | { kind: "shot"; label: string; source: string }
   | { kind: "film"; ms: number; fps: number | null; source: string }
   | { kind: "until"; expression: string; ms: number; source: string }
+  | { kind: "expect"; expression: string; source: string }
+  | { kind: "background"; ms: number; source: string }
   | { kind: "js"; expression: string; source: string };
 
 export const STEP_HELP = `Steps (separate with ";" or new lines, "#" starts a comment line):
@@ -38,6 +40,8 @@ export const STEP_HELP = `Steps (separate with ";" or new lines, "#" starts a co
   shot [label]                take a screenshot for the storyboard
   film <time> [fps]           capture frames while time passes
   until <js expression> [time] advance time until the expression is truthy (default timeout 5s)
+  expect <js expression>      fail the run here unless the expression is truthy (a test assertion)
+  background <time>           send the game to the background for this long (no frames), then bring it back
   js <js expression>          evaluate JavaScript in the page and log the result
 Times: 500, 500ms, 1.5s.`;
 
@@ -146,6 +150,12 @@ function parseStep(source: string): Step {
         source,
       };
     }
+    case "expect":
+      if (!rest) fail("expected a JavaScript expression, e.g. expect window.game.score > 0");
+      return { kind: "expect", expression: unquote(rest), source };
+    case "background":
+      if (args.length !== 1) fail("expected one time, e.g. background 5s");
+      return { kind: "background", ms: parseTime(args[0]!, fail), source };
     case "js":
       if (!rest) fail("expected a JavaScript expression");
       return { kind: "js", expression: unquote(rest), source };

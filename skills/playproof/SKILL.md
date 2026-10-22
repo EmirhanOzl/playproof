@@ -22,6 +22,7 @@ Run it with `npx playproof <command> <target>`. `<target>` is a URL (the dev ser
 | Does it crash, hang or soft-lock under random input? | `monkey <target> --steps 300` |
 | Does it look right on phones, tablets, desktop? | `devices <target>` |
 | Does it run smoothly? | `perf <target> --duration 10s` (add `--android` for a USB phone) |
+| Does it work in the real app on the phone? | any of the above with `--app <package>` (Capacitor/Cordova/Ionic WebView; no target needed) |
 
 Add `--device "iPhone 15"` (or `"Pixel 8"`, `desktop`, `390x844@3 mobile`) when the game is meant for phones. Default is a 1280×720 desktop.
 
@@ -35,10 +36,10 @@ Separate with `;`. Coordinates are inside the game area (the largest canvas): `5
 wait 500ms          tap 50%,80%         tap @Play             press 50%,50% 800ms
 drag 10%,50% 90%,50% 300ms              key Space [200ms]     type hello
 click #start-button  shot after-jump    film 1s [30]          until window.game.over 10s
-js window.game.score
+js window.game.score      expect window.game.lives === 3      background 5s
 ```
 
-`@Play` taps a target the game exposes (see hook below). `until` advances time until a JavaScript expression is true; use it instead of guessing waits. `js` evaluates an expression; its result is printed in the summary (`log` lines), so you can read game state without opening files.
+`expect` makes a script a test: the run fails there unless the expression is true. `background` sends the game to the background with no frames, like a phone switching apps, then brings it back. `@Play` taps a target the game exposes (see hook below). `until` advances time until a JavaScript expression is true; use it instead of guessing waits. `js` evaluates an expression; its result is printed in the summary (`log` lines), so you can read game state without opening files.
 
 ## Reading the output
 
@@ -50,7 +51,8 @@ js window.game.score
 - **onion.png**: the whole motion in one picture: up to ten moments ghosted over the still background, oldest faintest. The gaps between ghosts are the easing: wide = fast, tight = slow. Best view for arcs, anticipation and overshoot.
 - **compare.png** (`--compare`): each sampled frame of the earlier run (top) above the same frame now (bottom), with what differs outlined, and the earlier run's motion as a line over this run's bars. Runs are deterministic, so "identical" really means your change did not affect this motion.
 - **storyboard.png** (play): every `shot`, plus keyframes from each `film`, in order.
-- **monkey.png**: checkpoints along the random run. Red = first uncaught error, amber = stuck. Every error comes with a `Reproduce:` command. Rerun it after the fix: same seed, same actions, same game time.
+- **monkey.png**: checkpoints along the random run. Red = first uncaught error, amber = stuck. Every error comes with a `Reproduce:` command; rerun it after the fix (same seed, same actions, same game time). `repro.steps` holds the run as a script: `play --script` replays it, and deleting actions narrows the bug down.
+- **screens.png** (monkey): every distinct screen the random player reached. Screens you expected but do not see were never reached.
 - **devices.png**: each device at its real viewport. Findings are merged across devices (`[all 9 devices] ...`).
 - **perf.png**: frame time per frame against the frame budget line. Local runs slow the CPU 4× and have no GPU, so treat them as relative; `--android` measures a real phone.
 - `report.json` holds everything (per-frame motion values, step log, stats). The exit code is 1 when errors were found.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Real phones: `frames`, `play`, `monkey` and `perf` run on a USB-connected Android phone, in Chrome (`--android`) or inside an app's WebView (`--app <package>`: Capacitor, Cordova, Ionic), with the virtual clock. The app is reloaded back to normal afterwards.
+- `monkey` saves the run as `repro.steps`, a script that `play --script` replays exactly, and maps the distinct screens it reached (`screens.png`). With the game's targets it explores: untried buttons on each screen first.
+- New steps: `expect <js>` (a test assertion that reports the value it saw) and `background <time>`.
+
 ## 0.3.2
 
 - Listed in the official MCP Registry as `io.github.EmirhanOzl/playproof`; releases publish there automatically.

@@ -125,6 +125,24 @@ export async function runSteps(driver: Driver, steps: Step[], options: RunOption
           log.push(`step ${index + 1} (${step.source}): true after ${Math.round(waited)} ms`);
           break;
         }
+        case "expect": {
+          // Show what the parts of the expression were, so a failed assertion says why.
+          const value = await driver.evaluate(step.expression);
+          if (!value) {
+            const comparison = /^(.+?)\s*(===|!==|==|!=|>=|<=|>|<)\s*(.+)$/.exec(step.expression);
+            const left = comparison ? await driver.evaluate(comparison[1]!).catch(() => undefined) : undefined;
+            const why = comparison && left !== undefined ? ` (${comparison[1]!.trim()} is ${JSON.stringify(left)})` : "";
+            throw new Error(`expected ${step.expression}${why}`);
+          }
+          log.push(`step ${index + 1} (${step.source}): ok`);
+          break;
+        }
+        case "background":
+          await driver.setVisibility(true);
+          await pass(step.ms, false);
+          await driver.setVisibility(false);
+          await pass(driver.frameMs);
+          break;
         case "js": {
           const value = await driver.evaluate(step.expression);
           log.push(`step ${index + 1} (${step.source}) → ${JSON.stringify(value)?.slice(0, 2000)}`);

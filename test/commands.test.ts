@@ -306,3 +306,40 @@ test("config files are validated with clear messages", async () => {
   writeFileSync(path, JSON.stringify({ targt: "." }));
   assert.throws(() => loadConfig(path), /unknown key "targt"/);
 });
+
+test("expect fails a script with the value it saw", async () => {
+  const report = await captureCommand("play", {
+    ...common("examples/jumper"),
+    steps: parseSteps("tap @Play; expect window.playproof.state().screen === 'playing'; background 2s; expect window.playproof.state().score > 3"),
+    maxTiles: 24,
+    boxes: true,
+    fullView: false,
+    realtime: false,
+    saveFrames: false,
+  });
+  const failure = report.findings.find((f) => f.severity === "error")!;
+  assert.match(failure.title, /Step 4 failed .*\(window\.playproof\.state\(\)\.score is 0\)/);
+});
+
+test("monkey saves a script that replays the crash, and maps the screens it reached", async () => {
+  const monkey = await monkeyCommand({
+    ...common("examples/buggy", { device: resolveDevice("Pixel 8") }),
+    steps: 200,
+    keys: [],
+    background: true,
+    realtime: false,
+    keepGoing: false,
+  });
+  assert.ok(monkey.images.some((image) => image.path.endsWith("screens.png")));
+  const script = readFileSync(join(monkey.run.dir, "repro.steps"), "utf8");
+  const replay = await captureCommand("play", {
+    ...common("examples/buggy", { device: resolveDevice("Pixel 8") }),
+    steps: parseSteps(script),
+    maxTiles: 24,
+    boxes: true,
+    fullView: false,
+    realtime: false,
+    saveFrames: false,
+  });
+  assert.ok(replay.findings.some((f) => /TypeError/.test(f.title)), replay.findings.map((f) => f.title).join("\n"));
+});

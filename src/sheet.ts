@@ -114,6 +114,12 @@ export class Compositor {
     return out.map(fromDataUrl);
   }
 
+  // 64-bit difference hash of an image (9×8 grayscale, each pixel compared with its right neighbour): similar
+  // screens get hashes a few bits apart, while animation and small changes barely move it.
+  async screenHash(image: Buffer): Promise<string> {
+    return this.page.evaluate(renderHash, toDataUrl(image));
+  }
+
   // Two versions of the same frame stacked (before above, after below), with what differs outlined.
   async pair(before: Buffer, after: Buffer): Promise<PairResult> {
     const result = await this.page.evaluate(renderPair, { before: toDataUrl(before), after: toDataUrl(after) });
@@ -589,4 +595,30 @@ async function renderShrunk(input: { images: string[]; maxSide: number }): Promi
     out.push(canvas.toDataURL("image/png"));
   }
   return out;
+}
+
+async function renderHash(src: string): Promise<string> {
+  const img = await new Promise<HTMLImageElement>((done, fail) => {
+    const image = new Image();
+    image.onload = () => done(image);
+    image.onerror = () => fail(new Error("frame decode failed"));
+    image.src = src;
+  });
+  const canvas = document.createElement("canvas");
+  canvas.width = 9;
+  canvas.height = 8;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(img, 0, 0, 9, 8);
+  const data = ctx.getImageData(0, 0, 9, 8).data;
+  let bits = "";
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const i = (y * 9 + x) * 4;
+      const left = data[i]! * 0.299 + data[i + 1]! * 0.587 + data[i + 2]! * 0.114;
+      const right = data[i + 4]! * 0.299 + data[i + 5]! * 0.587 + data[i + 6]! * 0.114;
+      bits += left > right ? "1" : "0";
+    }
+  }
+  return bits;
 }

@@ -50,3 +50,9 @@ test("times", () => {
   assert.equal(parseTime("250ms"), 250);
   assert.equal(parseTime("1.5s"), 1500);
 });
+
+test("expect and background steps", () => {
+  const [expect, background] = parseSteps("expect window.game.score > 0; background 2s");
+  assert.deepEqual(expect, { kind: "expect", expression: "window.game.score > 0", source: "expect window.game.score > 0" });
+  assert.deepEqual(background, { kind: "background", ms: 2000, source: "background 2s" });
+});

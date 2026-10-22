@@ -126,7 +126,9 @@ npx playproof play http://localhost:5173 --device "Pixel 8" \
 
 ### `monkey`: random play that hunts for crashes
 
-Taps, drags, long presses, rapid triple taps, keys, and sending the tab to the background, all at random but **repeatable by seed**. It reports uncaught errors, failed requests, hangs (infinite loops), soft-locks (input keeps coming, nothing changes) and a render loop that stops. Every error comes with a command that reproduces it exactly.
+Taps, drags, long presses, rapid triple taps, keys, and sending the tab to the background, all at random but **repeatable by seed**. It reports uncaught errors, failed requests, hangs (infinite loops), soft-locks (input keeps coming, nothing changes) and a render loop that stops. Every error comes with a command that reproduces it exactly, and the whole run is saved as `repro.steps`, a script `play --script` replays action by action: delete lines until only the ones that matter are left.
+
+When the game exposes its buttons (see the hook below), the monkey explores: on each screen it tries buttons it has not pressed yet before repeating itself. `screens.png` shows every distinct screen it reached, so you can see how far a random player gets, and what it never reached.
 
 ```sh
 npx playproof monkey ./dist --device "Pixel 8" --steps 300
@@ -149,6 +151,18 @@ npx playproof devices http://localhost:5173
 
 ![Six devices side by side; the stretched ball on landscape and desktop is obvious, and findings are listed underneath](docs/images/devices.png)
 
+### On a real Android phone, in Chrome or inside your app
+
+`frames`, `play`, `monkey` and `perf` run on a USB-connected Android phone with `--android` (a tab in Chrome) or `--app <package>`, which attaches to the WebView inside an app built with **Capacitor, Cordova or Ionic**. playproof reloads the app's page with the virtual clock, so you get the same frame-exact sheets from the real app on the real device, and reloads it back to normal when it is done. Localhost is forwarded to the phone automatically.
+
+```sh
+npx playproof frames http://localhost:5173 --android --do "tap 50%,60%" --duration 800ms
+npx playproof monkey --app com.example.mygame --steps 200
+npx playproof perf --app com.example.mygame --duration 10s --monkey
+```
+
+Debug builds of Capacitor and Cordova apps have WebView debugging on; for other builds see `webContentsDebuggingEnabled`. In Chrome, playproof opens its own tab, talks only to that tab and closes it afterwards; it never lists or reads your other tabs.
+
 ### `perf`: frame pacing, locally or on a real phone
 
 Measures real frame times while the game idles, runs a script (`--do`) or takes random taps (`--monkey`): fps, p95/p99, dropped frames against the display's refresh rate, long main-thread tasks and heap growth. Locally the CPU is slowed 4× to approximate a mid-range phone. With `--android` it measures **Chrome on a USB-connected Android phone**; localhost is forwarded to the phone automatically.
@@ -159,8 +173,6 @@ npx playproof perf http://localhost:5173 --android
 ```
 
 ![Frame-time chart with most bars over the 16.7 ms budget line, marked red](docs/images/perf.png)
-
-On a phone, playproof opens its own tab, talks only to that tab and closes it afterwards. It never lists or reads your other tabs.
 
 ## Scenarios and `check`: snapshot tests for motion
 
@@ -221,6 +233,8 @@ Used by `--do` and `--script <file>` (one step per line there). Separate steps w
 | `shot [label]` | screenshot for the storyboard |
 | `film 1s [30]` | capture frames while time passes |
 | `until <js> [5s]` | advance time until the expression is true |
+| `expect <js>` | fail the run unless the expression is true (says what the left side was) |
+| `background 5s` | send the game to the background (no frames), then bring it back |
 | `js <js>` | evaluate and log a value |
 
 Times: `500`, `500ms`, `1.5s`.
@@ -258,7 +272,7 @@ Exit codes: `0` nothing serious found, `1` errors found (crashes, failed request
 
 - Node.js 22.18 or newer.
 - A Chromium-based browser: your installed Chrome or Edge, or `npx playproof install-browser`. Pick one with `--browser chromium|chrome|msedge|<path>`.
-- For `perf --android`: `adb` (Android platform-tools), a phone with USB debugging allowed, the screen on and unlocked.
+- For `--android` and `--app`: `adb` (Android platform-tools), a phone with USB debugging allowed, the screen on and unlocked.
 
 ## Limitations
 

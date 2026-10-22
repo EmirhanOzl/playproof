@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import type { Driver, HookTarget, Rect } from "../driver.ts";
 import { issueFindings, RunDir, type Finding, type Report, type ReportImage } from "../report.ts";
 import { openGameSession } from "../session.ts";
 import { Compositor, type Tile } from "../sheet.ts";
+import { runSteps } from "../runner.ts";
+import { parseSteps } from "../steps.ts";
 import { formatTime, imageList, sessionOptions, type CommonOptions } from "./common.ts";
 
 export interface MonkeyOptions extends CommonOptions {
@@ -17,8 +20,9 @@ export interface MonkeyOptions extends CommonOptions {
 
 interface Action {
   index: number;
+  // Steps in the script language, e.g. "tap 120,300; wait 150ms".
+  script: string;
   text: string;
-  run(driver: Driver): Promise<number>;
 }
 
 const STUCK_ACTIONS = 40;
@@ -36,6 +40,10 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
   const log: string[] = [];
   const findings: Finding[] = [];
   const checkpoints: Tile[] = [];
+  const script: string[] = [];
+  // Distinct screens reached, by perceptual hash; each keeps its first sighting and the buttons tried on it.
+  const screens: { hash: string; image: Buffer; action: number; time: number; tried: Set<string> }[] = [];
+  let current = -1;
   let failureShot: Buffer | null = null;
   let stoppedAt: number | null = null;
 
@@ -49,16 +57,34 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
     let gameTime = 0;
     const checkpointEvery = Math.max(1, Math.floor(options.steps / CHECKPOINTS));
 
+    compositor = await Compositor.open(session.browser);
+    const sheetMaker = compositor;
+    const look = async (index: number, time: number): Promise<void> => {
+      const image = await driver.screenshot(await driver.area());
+      const hash = await sheetMaker.screenHash(image);
+      const near = screens.findIndex((s) => hamming(s.hash, hash) <= 10);
+      if (near >= 0) current = near;
+      else {
+        screens.push({ hash, image, action: index, time, tried: new Set() });
+        current = screens.length - 1;
+      }
+    };
+    await look(0, 0);
+
     for (let index = 0; index < options.steps; index++) {
       const area = await driver.area();
       const targets = await driver.targets().catch(() => [] as HookTarget[]);
-      const action = pickAction(index, random, area, targets, options);
+      const action = pickAction(index, random, area, targets, options, screens[current]?.tried ?? new Set());
       session.during = `action ${index + 1}: ${action.text}`;
       log.push(`${String(index + 1).padStart(4)}  ${formatTime(gameTime).padStart(9)}  ${action.text}`);
       const errorsBefore = session.issues.filter((i) => i.kind === "pageerror" || i.kind === "crash").length;
 
       const hangMs = options.hangMs ?? 15000;
-      const outcome = await withTimeout(action.run(driver), hangMs);
+      script.push(`# action ${index + 1}`, ...action.script.split("; "));
+      const outcome = await withTimeout(
+        runSteps(driver, parseSteps(action.script), { fullView: false }).then((result) => result.elapsedMs),
+        hangMs,
+      );
       if (outcome === "timeout") {
         findings.push({
           severity: "error",
@@ -69,6 +95,7 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
         break;
       }
       gameTime += outcome;
+      await look(index + 1, gameTime);
 
       const newErrors = session.issues.filter((i) => i.kind === "pageerror" || i.kind === "crash").length > errorsBefore;
       if (newErrors && failureShot === null) {
@@ -126,7 +153,6 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
     }
     findings.unshift(...issues);
 
-    compositor = await Compositor.open(session.browser);
     const images: ReportImage[] = [];
     if (failureShot) checkpoints.push({ image: failureShot, caption: `first error, action ${(stoppedAt ?? 0) + 1}`, accent: "red" });
     if (checkpoints.length) {
@@ -144,7 +170,34 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
       });
       imageList(images, run, "monkey.png", "checkpoints along the run (red = first error, amber = stuck)", png);
     }
+    if (screens.length) {
+      const png = await compositor.sheet({
+        title: `screens reached  ·  ${screens.length} distinct`,
+        subtitle: "Each screen the random player reached, the first time it got there. What is missing here was never reached.",
+        tiles: screens.slice(0, 40).map((s, i) => ({
+          image: s.image,
+          caption: `#${i + 1}  action ${s.action}  ·  ${formatTime(s.time)}`,
+        })),
+        tileHeight: 200,
+        maxWidth: 1600,
+        notes: screens.length > 40 ? [{ text: `${screens.length - 40} more screens not shown.`, tone: "plain" }] : [],
+      });
+      imageList(images, run, "screens.png", `the ${screens.length} distinct screens the random player reached`, png);
+      findings.push({ severity: "info", title: `Reached ${screens.length} distinct screen${screens.length === 1 ? "" : "s"} (see screens.png).` });
+    }
     run.write("actions.txt", `${log.join("\n")}\n`);
+    const scriptPath = run.write(
+      "repro.steps",
+      [
+        "# Replays this monkey run action by action. Delete actions to narrow a bug down; keep the same device and seed:",
+        `# ${replay(options, seed, run.dir)}`,
+        ...script,
+        "",
+      ].join("\n"),
+    );
+    for (const finding of findings) {
+      if (finding.detail?.includes("Reproduce:")) finding.detail += `\nAs a script: ${replay(options, seed, run.dir)}  (${scriptPath})`;
+    }
 
     return {
       command: "monkey",
@@ -160,6 +213,7 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
         clock: options.realtime ? "real" : "virtual",
         actionLog: `${run.dir}/actions.txt`,
         reproduce: repro(options, seed, log.length),
+        screens: screens.map((s) => ({ action: s.action, timeMs: Math.round(s.time) })),
       },
       run,
     };
@@ -169,125 +223,46 @@ export async function monkeyCommand(options: MonkeyOptions): Promise<Report & { 
   }
 }
 
+// Every random action is written in the step language and run by the same engine as play, so the actions that
+// led to a bug can be saved as a script that replays them exactly (repro.steps).
 function pickAction(
   index: number,
   random: () => number,
   area: Rect,
   targets: HookTarget[],
   options: MonkeyOptions,
+  tried: Set<string>,
 ): Action {
-  const point = (): [number, number] => [
-    Math.round(area.x + area.width * (0.03 + 0.94 * random())),
-    Math.round(area.y + area.height * (0.03 + 0.94 * random())),
-  ];
+  // Points are relative to the game area, as in scripts.
+  const point = (): string =>
+    `${Math.round(area.width * (0.03 + 0.94 * random()))},${Math.round(area.height * (0.03 + 0.94 * random()))}`;
   const pause = (): number => Math.round(40 + random() * 260);
+  const action = (script: string, label?: string): Action => ({ index, script, text: label ? `${label}: ${script}` : script });
   const r = random();
-  const base = { index };
 
   if (targets.length && r < 0.4) {
-    const target = targets[Math.floor(random() * targets.length)]!;
-    const x = Math.round(target.x + target.width * (0.2 + 0.6 * random()));
-    const y = Math.round(target.y + target.height * (0.2 + 0.6 * random()));
-    const wait = pause();
-    return { ...base, text: `tap @${target.label || "target"} (${x},${y}), wait ${wait}ms`, run: (d) => tap(d, x, y, wait) };
+    // Explore: buttons not yet tried on this screen first, so the run goes deeper instead of repeating itself.
+    const fresh = targets.filter((t) => !tried.has(t.label));
+    const pool = fresh.length && random() < 0.75 ? fresh : targets;
+    const target = pool[Math.floor(random() * pool.length)]!;
+    tried.add(target.label);
+    const x = Math.round(target.x - area.x + target.width * (0.2 + 0.6 * random()));
+    const y = Math.round(target.y - area.y + target.height * (0.2 + 0.6 * random()));
+    return action(`tap ${x},${y}; wait ${pause()}ms`, `@${target.label || "target"}`);
   }
   const roll = targets.length ? (r - 0.4) / 0.6 : r;
   if (options.keys.length && roll < 0.14) {
     const key = options.keys[Math.floor(random() * options.keys.length)]!;
-    const hold = Math.round(30 + random() * 400);
-    const wait = pause();
-    return {
-      ...base,
-      text: `key ${key === " " ? "Space" : key} for ${hold}ms, wait ${wait}ms`,
-      run: async (d) => {
-        await d.key("down", key);
-        await d.advance(hold);
-        await d.key("up", key);
-        await d.advance(wait);
-        return hold + wait;
-      },
-    };
+    return action(`key ${key === " " ? "Space" : key} ${Math.round(30 + random() * 400)}ms; wait ${pause()}ms`);
   }
-  if (roll < 0.24) {
-    const [x1, y1] = point();
-    const [x2, y2] = point();
-    const ms = Math.round(80 + random() * 400);
-    const wait = pause();
-    return {
-      ...base,
-      text: `drag ${x1},${y1} → ${x2},${y2} in ${ms}ms, wait ${wait}ms`,
-      run: async (d) => {
-        const moves = Math.max(2, Math.round(ms / d.frameMs));
-        await d.pointer("down", x1, y1);
-        for (let m = 1; m <= moves; m++) {
-          await d.advance(ms / moves);
-          await d.pointer("move", x1 + ((x2 - x1) * m) / moves, y1 + ((y2 - y1) * m) / moves);
-        }
-        await d.pointer("up", x2, y2);
-        await d.advance(wait);
-        return ms + wait;
-      },
-    };
-  }
-  if (roll < 0.3) {
-    const [x, y] = point();
-    const hold = Math.round(350 + random() * 700);
-    const wait = pause();
-    return {
-      ...base,
-      text: `long press ${x},${y} for ${hold}ms, wait ${wait}ms`,
-      run: async (d) => {
-        await d.pointer("down", x, y);
-        await d.advance(hold);
-        await d.pointer("up", x, y);
-        await d.advance(wait);
-        return hold + wait;
-      },
-    };
-  }
+  if (roll < 0.24) return action(`drag ${point()} ${point()} ${Math.round(80 + random() * 400)}ms; wait ${pause()}ms`);
+  if (roll < 0.3) return action(`press ${point()} ${Math.round(350 + random() * 700)}ms; wait ${pause()}ms`);
   if (roll < 0.36) {
-    const [x, y] = point();
-    const wait = pause();
-    return {
-      ...base,
-      text: `rapid triple tap ${x},${y}, wait ${wait}ms`,
-      run: async (d) => {
-        for (let k = 0; k < 3; k++) {
-          await d.pointer("down", x, y);
-          await d.advance(d.frameMs);
-          await d.pointer("up", x, y);
-          await d.advance(d.frameMs);
-        }
-        await d.advance(wait);
-        return wait + 6 * d.frameMs;
-      },
-    };
+    const at = point();
+    return action(`tap ${at}; tap ${at}; tap ${at}; wait ${pause()}ms`, "rapid triple tap");
   }
-  if (options.background && roll < 0.38) {
-    const away = Math.round(1000 + random() * 7000);
-    return {
-      ...base,
-      text: `send to background for ${away}ms, then return`,
-      run: async (d) => {
-        await d.setVisibility(true);
-        await d.advance(away, false);
-        await d.setVisibility(false);
-        await d.advance(300);
-        return away + 300;
-      },
-    };
-  }
-  const [x, y] = point();
-  const wait = pause();
-  return { ...base, text: `tap ${x},${y}, wait ${wait}ms`, run: (d) => tap(d, x, y, wait) };
-}
-
-async function tap(driver: Driver, x: number, y: number, wait: number): Promise<number> {
-  await driver.pointer("down", x, y);
-  await driver.advance(50);
-  await driver.pointer("up", x, y);
-  await driver.advance(wait);
-  return 50 + wait;
+  if (options.background && roll < 0.38) return action(`background ${Math.round(1000 + random() * 7000)}ms; wait 300ms`);
+  return action(`tap ${point()}; wait ${pause()}ms`);
 }
 
 async function screenSignature(driver: Driver, area: Rect): Promise<string> {
@@ -324,6 +299,19 @@ function repro(options: MonkeyOptions, seed: number, steps: number): string {
   if (options.device.name !== "Desktop") parts.push(`--device ${JSON.stringify(options.device.name)}`);
   if (options.realtime) parts.push("--realtime");
   return parts.join(" ");
+}
+
+function replay(options: MonkeyOptions, seed: number, dir: string): string {
+  const parts = ["playproof play", JSON.stringify(options.target), "--script", JSON.stringify(join(dir, "repro.steps")), `--seed ${seed}`];
+  if (options.device.name !== "Desktop") parts.push(`--device ${JSON.stringify(options.device.name)}`);
+  if (options.realtime) parts.push("--realtime");
+  return parts.join(" ");
+}
+
+function hamming(a: string, b: string): number {
+  let distance = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) distance++;
+  return distance;
 }
 
 export function mulberry32(seed: number): () => number {
