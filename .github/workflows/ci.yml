@@ -25,7 +25,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: node src/cli.ts install-browser ${{ runner.os == 'Linux' && '--with-deps' || '' }}
+      # GitHub's runners already have the system libraries Chrome needs; --with-deps would spend minutes in apt.
+      - run: node src/cli.ts install-browser
       - run: npm run check
       - run: npm run build
       - run: node dist/cli.js --version

@@ -3,6 +3,7 @@
 ## 0.3.1
 
 - Faster runs: the wait for queued browser tasks between frames only happens when the game posted messages or used storage or workers since the last frame. 0.3.0 waited on every frame, which made long monkey runs several times slower.
+- GitHub Action: uses the runner's preinstalled Chrome instead of installing Chromium's system packages, which took minutes on the new Ubuntu runners.
 
 ## 0.3.0
 

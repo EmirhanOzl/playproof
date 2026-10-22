@@ -51,7 +51,13 @@ runs:
           playproof="npx -y playproof@${{ inputs.version }}"
         fi
         echo "PLAYPROOF=$playproof" >> "$GITHUB_ENV"
-        $playproof install-browser --with-deps
+        # GitHub-hosted runners come with Chrome, which playproof uses when its own Chromium is missing; installing
+        # Chromium's system packages through apt can take minutes. Self-hosted runners without Chrome get both.
+        if command -v google-chrome >/dev/null 2>&1 || command -v chrome >/dev/null 2>&1 || [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ] || [ -f "C:/Program Files/Google/Chrome/Application/chrome.exe" ]; then
+          echo "Using the runner's Chrome."
+        else
+          $playproof install-browser --with-deps
+        fi
 
     - name: Start the game
       if: inputs.start != ''

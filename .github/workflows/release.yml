@@ -24,7 +24,7 @@ jobs:
       - name: Tag matches package.json
         run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
       - run: npm ci
-      - run: node src/cli.ts install-browser --with-deps
+      - run: node src/cli.ts install-browser
       - run: npm run check
       - run: npm publish --access public
       - name: GitHub release with the changelog entry
