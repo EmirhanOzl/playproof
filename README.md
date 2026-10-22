@@ -71,7 +71,7 @@ For apps that call tools instead of running commands, playproof is also an MCP s
 
 ### Without an agent
 
-Nothing to install. Run it with `npx`, pointing it at a dev server, a build folder or an HTML file:
+Nothing to install. `npx playproof init` in your game's folder writes a `playproof.config.json` (it finds your dev server, build folder or HTML file); or point any command at a dev server, a build folder or an HTML file directly:
 
 ```sh
 npx playproof frames http://localhost:5173 --device "Pixel 8" --do "tap 50%,50%" --duration 1s

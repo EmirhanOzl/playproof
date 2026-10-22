@@ -1,6 +1,6 @@
 {
   "name": "playproof",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Eyes and hands for browser games. Lets coding agents (and you) see animation frame by frame, play scripted input, fuzz for crashes, check phone layouts and measure frame pacing.",
   "keywords": [
     "game",

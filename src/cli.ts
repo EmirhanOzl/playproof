@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { captureCommand } from "./commands/capture.ts";
 import { checkCommand } from "./commands/check.ts";
+import { initCommand, initMessage } from "./commands/init.ts";
 import { CONFIG_FILE, loadConfig, scenarioOf, type Scenario } from "./config.ts";
 import { parseZoom, type CommonOptions } from "./commands/common.ts";
 import { devicesCommand } from "./commands/devices.ts";
@@ -27,6 +28,7 @@ Usage: playproof <command> <target> [options]
   It can be left out when ${CONFIG_FILE} sets "target".
 
 Commands
+  init [target]      Write a ${CONFIG_FILE} for this project (guesses the target), then print next steps.
   frames <target>    Film the game frame by frame on a virtual clock and lay the frames out as a contact sheet,
                      with motion analysis (sudden jumps, one-frame flicker, stalls).
   play <target>      Run a script of taps, drags, keys and waits; get a storyboard of shots and films.
@@ -142,6 +144,7 @@ const OPTIONS = {
   animate: { type: "boolean" },
   config: { type: "string" },
   update: { type: "boolean" },
+  force: { type: "boolean" },
   only: { type: "string" },
   zoom: { type: "string" },
   cpu: { type: "string" },
@@ -175,6 +178,10 @@ async function main(argv: string[]): Promise<number> {
 
   if (command === "mcp") {
     await runMcpServer(version());
+    return 0;
+  }
+  if (command === "init") {
+    console.log(initMessage(initCommand(process.cwd(), rest[0], Boolean(v.force))));
     return 0;
   }
   if (command === "skill") {

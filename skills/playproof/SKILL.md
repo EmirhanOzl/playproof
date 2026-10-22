@@ -25,7 +25,7 @@ Run it with `npx playproof <command> <target>`. `<target>` is a URL (the dev ser
 
 Add `--device "iPhone 15"` (or `"Pixel 8"`, `desktop`, `390x844@3 mobile`) when the game is meant for phones. Default is a 1280×720 desktop.
 
-If the project has a `playproof.config.json`, read it first: it sets the target and device, and its `scenarios` name the moments worth filming. `--scenario <name>` replaces the steps, duration and zoom; the target can be left out. When you film the same steps more than twice, add them as a scenario. `playproof check` films every scenario against its committed baseline and runs monkey and devices: run it before finishing, and when it reports changed motion, look at `compare.png`; accept intended changes with `check --update` (tell the user, since it rewrites the baselines).
+If the project has no `playproof.config.json` and you will test more than once, run `npx playproof init` (it guesses the target; check it). If it has one, read it first: it sets the target and device, and its `scenarios` name the moments worth filming. `--scenario <name>` replaces the steps, duration and zoom; the target can be left out. When you film the same steps more than twice, add them as a scenario. `playproof check` films every scenario against its committed baseline and runs monkey and devices: run it before finishing, and when it reports changed motion, look at `compare.png`; accept intended changes with `check --update` (tell the user, since it rewrites the baselines).
 
 ## Steps (`--do`)
 
