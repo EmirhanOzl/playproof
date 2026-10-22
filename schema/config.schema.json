@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpkg.com/playproof/schema/config.schema.json",
+  "title": "playproof.config.json",
+  "description": "Defaults and named scenarios for playproof. Command-line flags override these.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "target": { "type": "string", "description": "URL of the game, or a folder/HTML file relative to this config file." },
+    "device": { "type": "string", "description": "Default device: a Playwright device name (\"Pixel 8\", \"iPhone 15\"), \"desktop\", or WIDTHxHEIGHT[@SCALE] [mobile]." },
+    "area": { "type": "string", "description": "CSS selector of the game area (default: the largest canvas)." },
+    "ready": { "type": "string", "description": "JavaScript expression that is true once the game has loaded." },
+    "waitFor": { "type": "string", "description": "CSS selector to wait for before starting." },
+    "settle": { "type": "string", "description": "Extra time after loading, e.g. 500ms." },
+    "timeout": { "type": "string", "description": "Load timeout, e.g. 30s." },
+    "seed": { "oneOf": [{ "type": "integer" }, { "const": "off" }], "description": "Seed for Math.random (default 1), or \"off\"." },
+    "baselines": { "type": "string", "description": "Folder for check baselines, relative to this file (default playproof-baselines). Commit it." },
+    "scenarios": {
+      "type": "object",
+      "description": "Named things to film. Used by --scenario <name> and by playproof check.",
+      "propertyNames": { "pattern": "^[\\w.-]+$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "do": { "type": "string", "description": "Steps before filming, separated by ';' (e.g. \"tap @Play; wait 300ms; key Space\")." },
+          "script": { "type": "string", "description": "File with steps, one per line, relative to this config file." },
+          "duration": { "type": "string", "description": "How long to film, e.g. 700ms or 1.5s (default 1s)." },
+          "fps": { "type": "number", "exclusiveMinimum": 0, "description": "Tiles per second on the contact sheet." },
+          "zoom": { "type": "string", "description": "\"auto\" to crop to where the motion is, or x,y,w,h in percent of the game area." },
+          "device": { "type": "string", "description": "Device for this scenario only." }
+        }
+      }
+    },
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What playproof check runs besides the scenarios.",
+      "properties": {
+        "monkey": {
+          "oneOf": [
+            { "const": false },
+            { "type": "object", "additionalProperties": false, "properties": { "steps": { "type": "integer", "minimum": 1 }, "seed": { "type": "integer" } } }
+          ]
+        },
+        "devices": {
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "object", "additionalProperties": false, "properties": { "devices": { "type": "array", "items": { "type": "string" } } } }
+          ]
+        },
+        "perf": {
+          "oneOf": [
+            { "const": false },
+            { "type": "object", "additionalProperties": false, "properties": { "duration": { "type": "string" }, "cpu": { "type": "number", "minimum": 1 } } }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { buildApng } from "../apng.ts";
 import { describeDevice } from "../devices.ts";
 import { issueFindings, RunDir, type Finding, type Report, type ReportImage } from "../report.ts";
 import { runSteps, type StoryItem } from "../runner.ts";
@@ -32,6 +35,8 @@ export interface CaptureOptions extends CommonOptions {
   // Folder of an earlier frames run to compare the first film with.
   compare?: string;
   zoom?: Zoom;
+  // Also write each film as an animated PNG at 30 fps, for people (and pull requests).
+  animate?: boolean;
 }
 
 // `frames` and `play` share this: run the steps, then render films as contact sheets and everything as a storyboard.
@@ -64,13 +69,17 @@ export async function captureCommand(command: "frames" | "play", options: Captur
     const findings: Finding[] = [];
     const films = result.items.filter((item): item is Extract<StoryItem, { kind: "film" }> => item.kind === "film");
     const filmData: Record<string, unknown>[] = [];
+    // Frames are only comparable with the same crop: reuse the earlier run's zoom region.
+    const baselineZoom = options.compare ? readZoom(options.compare) : null;
 
     for (const [n, captured] of films.entries()) {
       const label = films.length === 1 ? "film" : `film ${n + 1}`;
       let film = captured;
       let zoomRegion: { x: number; y: number; width: number; height: number } | null = null;
-      if (options.zoom) {
-        const zoomed = await zoomFilm(compositor, captured, options.zoom);
+      let compareData: { differing: number; compared: number } | null = null;
+      const zoomSpec = n === 0 && baselineZoom ? baselineZoom : options.zoom;
+      if (zoomSpec) {
+        const zoomed = await zoomFilm(compositor, captured, zoomSpec);
         if (zoomed) {
           film = zoomed.film;
           const r = zoomed.region;
@@ -93,6 +102,12 @@ export async function captureCommand(command: "frames" | "play", options: Captur
       imageList(images, run, name, `${label}: contact sheet, ${sheet.tiles.length} of ${film.frames.length} frames`, sheet.png);
       const onion = await buildOnion(compositor, film, session.driver.frameMs, `onion skin  ·  ${film.label}`);
       imageList(images, run, name.replace(".png", "-onion.png").replace("frames-onion", "onion"), `${label}: onion skin, the whole motion in one picture`, onion);
+      if (options.animate) {
+        const stride = Math.max(1, Math.round(1000 / 30 / session.driver.frameMs));
+        const picked = film.frames.filter((_, i) => i % stride === stride - 1).map((frame) => frame.image);
+        const animation = buildApng(await compositor.shrink(picked, 540), 1000 / (session.driver.frameMs * stride));
+        imageList(images, run, name.replace(".png", "-animation.png").replace("frames-animation", "animation"), `${label}: animated, real speed (open in a browser)`, animation);
+      }
       findings.push(...motionToFindings(sheet.findings, label));
       if (n === 0) for (const index of sheet.tiles) run.write(tileName(index), film.frames[index]!.image);
       if (n === 0 && options.compare) {
@@ -102,6 +117,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
         });
         imageList(images, run, "compare.png", "this run against the earlier one, frame by frame", compared.png);
         findings.push(compared.finding);
+        compareData = { differing: compared.differing.length, compared: compared.compared };
       }
       filmData.push({
         label,
@@ -109,6 +125,7 @@ export async function captureCommand(command: "frames" | "play", options: Captur
         frames: film.frames.length,
         tiles: sheet.tiles.map((i) => i + 1),
         zoom: zoomRegion,
+        compare: n === 0 ? compareData : null,
         screenChangePerFrame: sheet.diffs,
       });
       if (options.saveFrames) {
@@ -169,5 +186,16 @@ export async function captureCommand(command: "frames" | "play", options: Captur
   } finally {
     await compositor?.close();
     await session.close();
+  }
+}
+
+function readZoom(dir: string): { x: number; y: number; width: number; height: number } | null {
+  try {
+    const report = JSON.parse(readFileSync(join(dir, "report.json"), "utf8")) as {
+      data?: { films?: { zoom?: { x: number; y: number; width: number; height: number } | null }[] };
+    };
+    return report.data?.films?.[0]?.zoom ?? null;
+  } catch {
+    return null;
   }
 }

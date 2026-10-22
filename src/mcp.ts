@@ -1,13 +1,15 @@
 import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { captureCommand } from "./commands/capture.ts";
+import { checkCommand } from "./commands/check.ts";
+import { loadConfig, scenarioOf, type Scenario } from "./config.ts";
 import { parseZoom, type CommonOptions } from "./commands/common.ts";
 import { devicesCommand } from "./commands/devices.ts";
 import { monkeyCommand } from "./commands/monkey.ts";
 import { perfCommand } from "./commands/perf.ts";
 import { DESKTOP, resolveDevice } from "./devices.ts";
 import type { Report, RunDir } from "./report.ts";
-import { parseSteps, parseTime, STEP_HELP } from "./steps.ts";
+import { loadSteps, parseSteps, parseTime, STEP_HELP } from "./steps.ts";
 
 // A Model Context Protocol server over stdio (newline-delimited JSON-RPC), for agents and apps that call tools
 // instead of running shell commands. Tool results carry the images themselves, so the model sees the contact sheet
@@ -23,7 +25,11 @@ interface Request {
 }
 
 const common = {
-  target: { type: "string", description: "URL (e.g. http://localhost:5173), folder (./dist) or HTML file of the game" },
+  target: {
+    type: "string",
+    description: "URL (e.g. http://localhost:5173), folder (./dist) or HTML file of the game. Optional when playproof.config.json sets it.",
+  },
+  scenario: { type: "string", description: "Name of a scenario in playproof.config.json: supplies steps, duration, zoom and device" },
   device: { type: "string", description: 'Device to emulate: "iPhone 15", "Pixel 8", "desktop" (default) or "390x844@3 mobile"' },
   ready: { type: "string", description: "JavaScript expression that is true once the game has loaded" },
   waitFor: { type: "string", description: "CSS selector to wait for before starting" },
@@ -48,7 +54,7 @@ const TOOLS = [
         compare: { type: "string", description: "Output folder of an earlier frames run to compare with" },
         zoom: { type: "string", description: 'Crop to what moves ("auto") or to x,y,w,h in percent of the game area' },
       },
-      required: ["target"],
+      required: [],
     },
   },
   {
@@ -58,8 +64,22 @@ const TOOLS = [
       'Plays a script of taps, drags, keys and waits on the virtual clock and returns a storyboard of every "shot" and "film" step. Use "until <js> <time>" to wait for game states instead of guessing.',
     inputSchema: {
       type: "object",
-      properties: { ...common, steps: { ...steps, description: `Required. ${steps.description}` } },
-      required: ["target", "steps"],
+      properties: { ...common, steps: { ...steps, description: `Required unless a scenario gives them. ${steps.description}` } },
+      required: [],
+    },
+  },
+  {
+    name: "check",
+    title: "Check every scenario against its baseline",
+    description:
+      "Films every scenario in playproof.config.json and compares it with its committed baseline (a snapshot test for motion), then runs monkey and devices. Changed motion is an error with a compare image; update = true accepts the current motion as the new baseline (rewrites files: only when the change is intended).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        update: { type: "boolean", description: "Accept the current motion as the new baselines" },
+        only: { type: "array", items: { type: "string" }, description: "Scenario names and/or monkey, devices, perf" },
+      },
+      required: [],
     },
   },
   {
@@ -74,7 +94,7 @@ const TOOLS = [
         actions: { type: "number", description: "Number of random actions (default 300)" },
         seed: { type: "number", description: "Random seed (default 1); the same seed replays the same actions" },
       },
-      required: ["target"],
+      required: [],
     },
   },
   {
@@ -89,7 +109,7 @@ const TOOLS = [
         devices: { type: "array", items: { type: "string" }, description: "Device names (default: a matrix of nine)" },
         steps: { ...steps, description: `Run on every device before the screenshot. ${steps.description}` },
       },
-      required: ["target"],
+      required: [],
     },
   },
   {
@@ -107,13 +127,13 @@ const TOOLS = [
         cpu: { type: "number", description: "CPU slowdown factor for local runs (default 4, 1 = off)" },
         android: { type: "boolean", description: "Measure on a USB-connected Android phone" },
       },
-      required: ["target"],
+      required: [],
     },
   },
 ];
 
 const INSTRUCTIONS =
-  "playproof lets you see and playtest browser games. After changing a web game's animation, input, layout or performance, run the matching tool and look at the returned images before saying it works: frames for motion, play for flows, monkey for crashes, devices for phone layouts, perf for smoothness. Runs are deterministic, so compare a frames run before and after a change.";
+  "playproof lets you see and playtest browser games. If the project has a playproof.config.json, its target and scenarios are used by default. After changing a web game's animation, input, layout or performance, run the matching tool and look at the returned images before saying it works: frames for motion, play for flows, monkey for crashes, devices for phone layouts, perf for smoothness. Runs are deterministic, so compare a frames run before and after a change.";
 
 export async function runMcpServer(version: string): Promise<void> {
   // stdout belongs to the protocol; anything else printed there would corrupt it.
@@ -208,36 +228,50 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
 
 function runTool(name: string, args: Record<string, unknown>): Promise<Report & { run: RunDir }> {
   const text = (key: string): string | undefined => (typeof args[key] === "string" && args[key] ? (args[key] as string) : undefined);
-  const target = text("target");
-  if (!target) throw new Error('"target" is required');
+  // Same precedence as the command line: arguments, then the scenario, then playproof.config.json.
+  const config = loadConfig(undefined);
+  const scenario: Scenario = text("scenario") ? scenarioOf(config, text("scenario")!) : {};
+  const target = text("target") ?? config?.target;
+  if (!target) throw new Error('"target" is required (or set "target" in playproof.config.json)');
+  const deviceName = text("device") ?? scenario.device ?? config?.device;
   const base: CommonOptions = {
     target,
-    device: text("device") ? resolveDevice(text("device")!) : DESKTOP,
-    area: text("area"),
-    waitFor: text("waitFor"),
-    ready: text("ready"),
-    settleMs: 500,
-    timeoutMs: 30000,
+    device: deviceName ? resolveDevice(deviceName) : DESKTOP,
+    area: text("area") ?? config?.area,
+    waitFor: text("waitFor") ?? config?.waitFor,
+    ready: text("ready") ?? config?.ready,
+    settleMs: config?.settle ? parseTime(config.settle) : 500,
+    timeoutMs: config?.timeout ? parseTime(config.timeout) : 30000,
     headed: false,
     json: false,
-    seed: typeof args.seed === "number" ? args.seed : 1,
+    seed: typeof args.seed === "number" ? args.seed : config?.seed === "off" ? null : (config?.seed ?? 1),
     fps: 60,
   };
-  const stepList = parseSteps(text("steps") ?? "");
+  const stepList = text("steps") ? parseSteps(text("steps")!) : loadSteps(scenario.do, scenario.script);
+  const duration = text("duration") ?? scenario.duration;
+  const zoom = text("zoom") ?? scenario.zoom;
   switch (name) {
     case "frames":
       return captureCommand("frames", {
         ...base,
         steps: stepList,
-        filmMs: text("duration") ? parseTime(text("duration")!) : 1000,
-        filmFps: typeof args.fps === "number" ? args.fps : undefined,
+        filmMs: duration ? parseTime(duration) : 1000,
+        filmFps: typeof args.fps === "number" ? args.fps : scenario.fps,
         maxTiles: 24,
         boxes: true,
         fullView: false,
         realtime: false,
         saveFrames: false,
         compare: text("compare"),
-        zoom: text("zoom") ? parseZoom(text("zoom")!) : undefined,
+        zoom: zoom ? parseZoom(zoom) : undefined,
+      });
+    case "check":
+      if (!config) throw new Error("check needs a playproof.config.json with scenarios in the working folder");
+      return checkCommand({
+        ...base,
+        config,
+        update: Boolean(args.update),
+        only: Array.isArray(args.only) ? args.only.map(String) : null,
       });
     case "play":
       if (!stepList.length) throw new Error('"steps" is required for play');
@@ -260,7 +294,7 @@ function runTool(name: string, args: Record<string, unknown>): Promise<Report & 
     default:
       return perfCommand({
         ...base,
-        durationMs: text("duration") ? parseTime(text("duration")!) : 10000,
+        durationMs: duration ? parseTime(duration) : 10000,
         cpu: typeof args.cpu === "number" ? args.cpu : args.android ? 1 : 4,
         steps: stepList,
         monkey: Boolean(args.monkey),

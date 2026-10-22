@@ -1,0 +1,108 @@
+name: playproof
+description: Playtest a browser game in CI. Motion snapshots, crash hunting, phone layouts and frame pacing, with the images attached.
+author: Emirhan
+branding:
+  icon: film
+  color: green
+
+inputs:
+  command:
+    description: "playproof command: check (default), frames, play, monkey, devices or perf"
+    default: check
+  args:
+    description: Extra arguments, e.g. a target URL and flags. check reads playproof.config.json.
+    default: ""
+  working-directory:
+    description: Folder to run in (where playproof.config.json lives).
+    default: .
+  start:
+    description: Command that serves the game in the background, e.g. "npm run preview". Leave empty for folder or file targets.
+    default: ""
+  wait-for-url:
+    description: URL to wait for after `start` before testing, e.g. http://localhost:4173
+    default: ""
+  version:
+    description: playproof version from npm, or "source" to run the code of this action's own checkout.
+    default: latest
+  artifact-name:
+    description: Name of the uploaded artifact with the images and report.
+    default: playproof
+
+outputs:
+  exit-code:
+    description: 0 = nothing serious found, 1 = errors found, 2 = playproof could not run.
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v7
+      with:
+        node-version: 24
+
+    - name: Install playproof and Chromium
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        if [ "${{ inputs.version }}" = "source" ]; then
+          npm ci --prefix "$GITHUB_ACTION_PATH" --omit=dev --ignore-scripts --no-audit --no-fund
+          playproof="node $GITHUB_ACTION_PATH/src/cli.ts"
+        else
+          playproof="npx -y playproof@${{ inputs.version }}"
+        fi
+        echo "PLAYPROOF=$playproof" >> "$GITHUB_ENV"
+        $playproof install-browser --with-deps
+
+    - name: Start the game
+      if: inputs.start != ''
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        nohup bash -c "${{ inputs.start }}" > "$RUNNER_TEMP/playproof-server.log" 2>&1 &
+        if [ -n "${{ inputs.wait-for-url }}" ]; then
+          for i in $(seq 1 120); do
+            curl -sf -o /dev/null "${{ inputs.wait-for-url }}" && exit 0
+            sleep 1
+          done
+          echo "::error::${{ inputs.wait-for-url }} did not answer within 120 s"
+          cat "$RUNNER_TEMP/playproof-server.log"
+          exit 1
+        fi
+
+    - name: Run playproof ${{ inputs.command }}
+      id: run
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set +e
+        out="$RUNNER_TEMP/playproof-results"
+        $PLAYPROOF ${{ inputs.command }} ${{ inputs.args }} --out "$out"
+        code=$?
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        {
+          echo "### playproof ${{ inputs.command }}"
+          echo
+          if [ -f "$out/summary.txt" ]; then
+            echo '```'
+            cat "$out/summary.txt"
+            echo '```'
+            echo
+            echo "Images and report.json are in the **${{ inputs.artifact-name }}** artifact."
+          else
+            echo "playproof could not run (exit code $code); see the step log."
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "results=$out" >> "$GITHUB_OUTPUT"
+
+    - name: Upload images and report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.run.outputs.results }}
+        if-no-files-found: ignore
+
+    - name: Fail on findings
+      if: steps.run.outputs.exit-code != '0'
+      shell: bash
+      run: exit ${{ steps.run.outputs.exit-code }}

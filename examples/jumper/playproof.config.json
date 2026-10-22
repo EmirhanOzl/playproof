@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/playproof/schema/config.schema.json",
+  "target": ".",
+  "device": "Pixel 8",
+  "scenarios": {
+    "title": { "duration": "800ms" },
+    "jump": { "do": "tap @Play; wait 400ms; key Space", "duration": "700ms", "zoom": "auto" },
+    "crash": { "do": "tap @Play; until window.playproof.state().screen === 'over' 20s", "duration": "500ms" }
+  },
+  "check": { "monkey": { "steps": 150 }, "devices": { "devices": ["iPhone SE (3rd gen)", "Pixel 8", "iPad Mini", "Desktop"] } }
+}

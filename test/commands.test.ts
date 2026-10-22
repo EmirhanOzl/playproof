@@ -239,7 +239,7 @@ test("the MCP server lists tools and returns images", async () => {
     const list = await call(2, "tools/list");
     assert.deepEqual(
       (list.tools as { name: string }[]).map((t) => t.name),
-      ["frames", "play", "monkey", "devices", "perf"],
+      ["frames", "play", "check", "monkey", "devices", "perf"],
     );
     const result = await call(3, "tools/call", {
       name: "frames",
@@ -264,4 +264,45 @@ test("--zoom auto crops to where the motion is", async () => {
   assert.match((report.log ?? []).join("\n"), /"playing"/);
   const zoom = (report.data.films as { zoom: { width: number; height: number } | null }[])[0]!.zoom;
   assert.ok(zoom && zoom.width < 0.5 && zoom.height < 0.5, JSON.stringify(zoom));
+});
+
+test("check writes baselines, passes when nothing changed, and fails when motion changes", async () => {
+  const { cpSync, writeFileSync } = await import("node:fs");
+  const { checkCommand } = await import("../src/commands/check.ts");
+  const { loadConfig } = await import("../src/config.ts");
+  const game = join(scratch, "check-game");
+  cpSync("examples/jumper/index.html", join(game, "index.html"), { recursive: true });
+  writeFileSync(
+    join(game, "playproof.config.json"),
+    JSON.stringify({ target: ".", scenarios: { jump: { do: "tap @Play; wait 300ms; key Space", duration: "400ms" } }, check: { monkey: false, devices: false } }),
+  );
+  const config = loadConfig(join(game, "playproof.config.json"))!;
+  const run = (update = false) => checkCommand({ ...common(config.target!), config, update, only: null });
+
+  const first = await run();
+  assert.deepEqual(first.log, ["jump: new baseline written"]);
+  const same = await run();
+  assert.deepEqual(same.log, ["jump: identical to the baseline"]);
+  assert.ok(same.findings.every((f) => f.severity !== "error"));
+
+  const html = readFileSync(join(game, "index.html"), "utf8");
+  writeFileSync(join(game, "index.html"), html.replace("hero.vy = -620", "hero.vy = -720"));
+  const changed = await run();
+  assert.match(changed.log![0]!, /^jump: \d+ of \d+ frames changed$/);
+  assert.ok(changed.findings.some((f) => f.severity === "error" && /motion changed from the baseline/.test(f.title)));
+
+  const accepted = await run(true);
+  assert.deepEqual(accepted.log, ["jump: baseline updated"]);
+});
+
+test("config files are validated with clear messages", async () => {
+  const { writeFileSync, mkdirSync } = await import("node:fs");
+  const { loadConfig } = await import("../src/config.ts");
+  const dir = join(scratch, "bad-config");
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, "playproof.config.json");
+  writeFileSync(path, JSON.stringify({ target: ".", scenarios: { jump: { do: "tap 1,1", lenght: "1s" } } }));
+  assert.throws(() => loadConfig(path), /scenario "jump": unknown key "lenght"/);
+  writeFileSync(path, JSON.stringify({ targt: "." }));
+  assert.throws(() => loadConfig(path), /unknown key "targt"/);
 });

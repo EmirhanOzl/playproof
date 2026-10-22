@@ -34,3 +34,9 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           awk -v v="$version" '$0 == "## " v {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
+      - name: Move the major tag (v0, used by the GitHub Action) to this release
+        run: |
+          major="v${GITHUB_REF_NAME#v}"
+          major="${major%%.*}"
+          git tag -f "$major" "$GITHUB_REF_NAME^{}"
+          git push -f origin "refs/tags/$major"

@@ -97,7 +97,7 @@ npx playproof frames ./dist --device "Pixel 8" --do "tap @Play; wait 400ms; key 
 
 ![Contact sheet of a jump: 14 tiles over 700 ms with dashed boxes around what moved, and a bar per frame](docs/images/frames-jump.png)
 
-Add `--zoom auto` when the thing that moves is small: playproof captures at full device resolution and crops every frame to where most of the motion happens, so a character's squash and stretch fill the tiles.
+Add `--animate` to also get the film as an animated PNG at real speed, to watch it yourself or drop into a pull request. Add `--zoom auto` when the thing that moves is small: playproof captures at full device resolution and crops every frame to where most of the motion happens, so a character's squash and stretch fill the tiles.
 
 It also draws an **onion skin**: the whole motion in one picture, oldest moments faintest. The gaps between the ghosts are the easing (wide gaps are fast, tight gaps are slow), which is exactly what animators look at to judge an arc, an anticipation or an overshoot.
 
@@ -161,6 +161,49 @@ npx playproof perf http://localhost:5173 --android
 ![Frame-time chart with most bars over the 16.7 ms budget line, marked red](docs/images/perf.png)
 
 On a phone, playproof opens its own tab, talks only to that tab and closes it afterwards. It never lists or reads your other tabs.
+
+## Scenarios and `check`: snapshot tests for motion
+
+Put the game's defaults and the moments worth watching in `playproof.config.json` (your editor autocompletes it from the [schema](schema/config.schema.json)):
+
+```json
+{
+  "$schema": "https://unpkg.com/playproof/schema/config.schema.json",
+  "target": "http://localhost:5173",
+  "device": "Pixel 8",
+  "scenarios": {
+    "title": { "duration": "800ms" },
+    "jump": { "do": "tap @Play; wait 400ms; key Space", "duration": "700ms", "zoom": "auto" }
+  },
+  "check": { "monkey": { "steps": 200 }, "devices": true }
+}
+```
+
+Then the target can be left out, and `--scenario jump` replaces the whole step list:
+
+```sh
+npx playproof frames --scenario jump
+```
+
+`playproof check` films every scenario and compares it with its baseline in `playproof-baselines/`, then runs `monkey` and `devices`. The first run writes the baselines (commit them). After that, any change to how a scenario moves fails the check with a `compare.png` that shows exactly what changed, until you accept it with `--update`. Baselines are kept per operating system, because fonts and anti-aliasing differ between them.
+
+```sh
+npx playproof check                 # everything
+npx playproof check --only jump     # one scenario
+npx playproof check --update        # accept the current motion
+```
+
+### In CI
+
+```yaml
+- uses: actions/checkout@v7
+- uses: EmirhanOzl/playproof@v0
+  with:
+    start: npm run preview
+    wait-for-url: http://localhost:4173
+```
+
+The action installs Chromium, runs `playproof check` (or any command via `command` and `args`), writes the summary to the job page and uploads the images as an artifact. Generate the Linux baselines once in CI (the first run writes them; download them from the artifact or run `--update` there) so they match the machine that checks them.
 
 ## Steps
 

@@ -33,6 +33,7 @@
   "files": [
     "dist",
     "skills",
+    "schema",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

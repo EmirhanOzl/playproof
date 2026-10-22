@@ -22,3 +22,14 @@ jobs:
       - run: npm run check
       - run: npm run build
       - run: node dist/cli.js --version
+
+  action:
+    # The GitHub Action, run from this checkout against the example game.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./
+        with:
+          version: source
+          working-directory: examples/jumper
+          args: --only title,jump,devices

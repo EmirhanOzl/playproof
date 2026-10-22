@@ -108,6 +108,12 @@ export class Compositor {
     return out.map(fromDataUrl);
   }
 
+  // Scales images down so their longer side is at most maxSide (never up).
+  async shrink(images: Buffer[], maxSide: number): Promise<Buffer[]> {
+    const out = await this.page.evaluate(renderShrunk, { images: images.map(toDataUrl), maxSide });
+    return out.map(fromDataUrl);
+  }
+
   // Two versions of the same frame stacked (before above, after below), with what differs outlined.
   async pair(before: Buffer, after: Buffer): Promise<PairResult> {
     const result = await this.page.evaluate(renderPair, { before: toDataUrl(before), after: toDataUrl(after) });
@@ -559,6 +565,27 @@ async function renderCrops(input: { images: string[]; rect: NormRect; minSide: n
     const ctx = canvas.getContext("2d")!;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    out.push(canvas.toDataURL("image/png"));
+  }
+  return out;
+}
+
+async function renderShrunk(input: { images: string[]; maxSide: number }): Promise<string[]> {
+  const out: string[] = [];
+  for (const src of input.images) {
+    const img = await new Promise<HTMLImageElement>((done, fail) => {
+      const image = new Image();
+      image.onload = () => done(image);
+      image.onerror = () => fail(new Error("frame decode failed"));
+      image.src = src;
+    });
+    const scale = Math.min(1, input.maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d")!;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     out.push(canvas.toDataURL("image/png"));
   }
   return out;

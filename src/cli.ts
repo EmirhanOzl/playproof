@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, type ParseArgsConfig } from "node:util";
 import { captureCommand } from "./commands/capture.ts";
+import { checkCommand } from "./commands/check.ts";
+import { CONFIG_FILE, loadConfig, scenarioOf, type Scenario } from "./config.ts";
 import { parseZoom, type CommonOptions } from "./commands/common.ts";
 import { devicesCommand } from "./commands/devices.ts";
 import { monkeyCommand } from "./commands/monkey.ts";
@@ -22,12 +24,15 @@ const HELP = `playproof: eyes and hands for browser games
 
 Usage: playproof <command> <target> [options]
   <target> is a URL (http://localhost:5173), a folder (./dist) or an HTML file (./game.html).
+  It can be left out when ${CONFIG_FILE} sets "target".
 
 Commands
   frames <target>    Film the game frame by frame on a virtual clock and lay the frames out as a contact sheet,
                      with motion analysis (sudden jumps, one-frame flicker, stalls).
   play <target>      Run a script of taps, drags, keys and waits; get a storyboard of shots and films.
   monkey <target>    Random play that hunts for crashes, hangs and soft-locks; repeatable by seed.
+  check [target]     Film every scenario in ${CONFIG_FILE} and compare it with its baseline (a snapshot
+                     test for motion), then run monkey and devices. --update accepts the current motion.
   devices <target>   Load the game on phones, a tablet and a desktop; screenshot each and check the layout
                      (blurry canvas, stretching, overflow, scrolling, touch-action, clipped text).
   perf <target>      Measure real frame pacing (fps, p95/p99, dropped frames, long tasks), locally or on a
@@ -39,6 +44,8 @@ Commands
                      (optional: an installed Chrome or Edge is used when it is missing).
 
 Common options
+  --scenario <name>    Use a scenario from ${CONFIG_FILE} (its steps, duration, zoom, device)
+  --config <path>      Config file (default: ${CONFIG_FILE} here or in a parent folder)
   --device <name>      Playwright device name ("iPhone 15", "Pixel 8"), "desktop", or 390x844@3 [mobile]
                        (default: desktop 1280x720)
   --area <selector>    Element that is the game area (default: the largest visible canvas)
@@ -62,6 +69,7 @@ frames
   --full               Film the whole viewport instead of the game area
   --no-boxes           Do not outline what changed between tiles
   --save-frames        Also write every frame as a PNG
+  --animate            Also write the film as an animated PNG at real speed (for people and pull requests)
   --compare <dir>      Compare with an earlier frames run (its output folder), frame by frame
   --zoom <auto|x,y,w,h> Crop to what moves (auto) or to a region in percent of the game area,
                        captured at full device resolution
@@ -89,6 +97,10 @@ perf
   --monkey             Tap randomly while measuring
   --android            Measure in Chrome on a USB-connected Android phone instead
   --serial <id>        Which phone, when several are connected (see adb devices)
+
+check
+  --update             Accept the current motion as the new baselines
+  --only <names>       Only these scenarios and/or parts (monkey, devices, perf), comma separated
 
 skill
   playproof skill install [--project] [--agent claude|agents|all]
@@ -126,6 +138,11 @@ const OPTIONS = {
   "keep-going": { type: "boolean" },
   devices: { type: "string" },
   compare: { type: "string" },
+  scenario: { type: "string" },
+  animate: { type: "boolean" },
+  config: { type: "string" },
+  update: { type: "boolean" },
+  only: { type: "string" },
   zoom: { type: "string" },
   cpu: { type: "string" },
   monkey: { type: "boolean" },
@@ -164,30 +181,41 @@ async function main(argv: string[]): Promise<number> {
     console.log(skillCommand(rest, { project: Boolean(v.project), agent: v.agent }));
     return 0;
   }
-  if (!["frames", "play", "monkey", "devices", "perf"].includes(command)) {
+  if (!["frames", "play", "monkey", "devices", "perf", "check"].includes(command)) {
     throw new UsageError(`Unknown command "${command}". Run playproof --help.`);
   }
-  const target = rest[0];
-  if (!target) throw new UsageError(`Missing <target>. Example: playproof ${command} http://localhost:5173`);
+  // Precedence: command line, then the scenario, then the config file, then built-in defaults.
+  const config = loadConfig(v.config);
+  const scenario: Scenario = v.scenario ? scenarioOf(config, v.scenario) : {};
+  const target = rest[0] ?? config?.target;
+  if (!target) {
+    throw new UsageError(`Missing <target>. Example: playproof ${command} http://localhost:5173 (or set "target" in ${CONFIG_FILE})`);
+  }
   if (rest.length > 1) throw new UsageError(`Unexpected argument "${rest[1]}". Quote step lists: --do "tap 50%,50%; wait 1s"`);
+  const deviceName = v.device ?? scenario.device ?? config?.device;
+  const seed = v.seed ?? (config?.seed === undefined ? undefined : String(config.seed));
+  const settle = v.settle ?? config?.settle;
+  const timeout = v.timeout ?? config?.timeout;
 
   const common: CommonOptions = {
     target,
-    device: v.device ? resolveDevice(v.device) : DESKTOP,
-    area: v.area,
-    waitFor: v["wait-for"],
-    ready: v.ready,
-    settleMs: v.settle ? parseTime(v.settle) : 500,
-    timeoutMs: v.timeout ? parseTime(v.timeout) : 30000,
+    device: deviceName ? resolveDevice(deviceName) : DESKTOP,
+    area: v.area ?? config?.area,
+    waitFor: v["wait-for"] ?? config?.waitFor,
+    ready: v.ready ?? config?.ready,
+    settleMs: settle ? parseTime(settle) : 500,
+    timeoutMs: timeout ? parseTime(timeout) : 30000,
     browser: v.browser,
     headed: Boolean(v.headed),
     out: v.out,
     json: Boolean(v.json),
-    seed: v.seed === "off" ? null : v.seed ? integer(v.seed, "--seed") : 1,
+    seed: seed === "off" ? null : seed ? integer(seed, "--seed") : 1,
     port: v.port ? integer(v.port, "--port") : undefined,
     fps: 60,
   };
-  const steps = () => loadSteps(v.do, v.script);
+  const steps = () => (v.do || v.script ? loadSteps(v.do, v.script) : loadSteps(scenario.do, scenario.script));
+  const zoom = v.zoom ?? scenario.zoom;
+  const duration = v.duration ?? scenario.duration;
 
   let result: Report & { run: RunDir };
   switch (command) {
@@ -195,15 +223,16 @@ async function main(argv: string[]): Promise<number> {
       result = await captureCommand("frames", {
         ...common,
         steps: steps(),
-        filmMs: v.duration ? parseTime(v.duration) : 1000,
-        filmFps: v.fps ? positive(v.fps, "--fps") : undefined,
+        filmMs: duration ? parseTime(duration) : 1000,
+        filmFps: v.fps ? positive(v.fps, "--fps") : scenario.fps,
         maxTiles: v["max-tiles"] ? integer(v["max-tiles"], "--max-tiles") : 24,
         boxes: v.boxes !== false,
         fullView: Boolean(v.full),
         realtime: false,
         saveFrames: Boolean(v["save-frames"]),
         compare: v.compare,
-        zoom: v.zoom ? parseZoom(v.zoom) : undefined,
+        zoom: zoom ? parseZoom(zoom) : undefined,
+        animate: Boolean(v.animate),
       });
       break;
     case "play": {
@@ -217,10 +246,20 @@ async function main(argv: string[]): Promise<number> {
         fullView: Boolean(v.full),
         realtime: Boolean(v.realtime),
         saveFrames: false,
-        zoom: v.zoom ? parseZoom(v.zoom) : undefined,
+        zoom: zoom ? parseZoom(zoom) : undefined,
+        animate: Boolean(v.animate),
       });
       break;
     }
+    case "check":
+      if (!config) throw new UsageError(`check needs a ${CONFIG_FILE} with scenarios (see playproof --help).`);
+      result = await checkCommand({
+        ...common,
+        config,
+        update: Boolean(v.update),
+        only: v.only ? v.only.split(",").map((name) => name.trim()).filter(Boolean) : null,
+      });
+      break;
     case "monkey":
       result = await monkeyCommand({
         ...common,
@@ -241,7 +280,7 @@ async function main(argv: string[]): Promise<number> {
     default:
       result = await perfCommand({
         ...common,
-        durationMs: v.duration ? parseTime(v.duration) : 10000,
+        durationMs: duration ? parseTime(duration) : 10000,
         cpu: v.cpu ? positive(v.cpu, "--cpu") : v.android ? 1 : 4,
         steps: steps(),
         monkey: Boolean(v.monkey),

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- `playproof.config.json`: the game's target and defaults, and named scenarios (`--scenario jump`), with a JSON Schema for editor autocompletion.
+- `playproof check`: films every scenario and compares it with its baseline (a snapshot test for motion), then runs monkey and devices; `--update` accepts changes, `--only` picks scenarios or parts. Baselines are kept per operating system.
+- GitHub Action (`uses: EmirhanOzl/playproof@v0`): runs any command in CI, writes the summary to the job page and uploads the images.
+- `--animate` (frames, play): the film as an animated PNG at real speed, for people and pull requests.
+- MCP: `check` tool, and `scenario` on every tool; the target can come from the config.
+- `--compare` reuses the earlier run's zoom region, so zoomed runs compare frame for frame.
+
 ## 0.1.0
 
 First release.

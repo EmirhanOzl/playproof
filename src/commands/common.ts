@@ -216,6 +216,7 @@ export interface CompareResult {
   png: Buffer;
   finding: Finding;
   differing: number[];
+  compared: number;
 }
 
 // Runs are deterministic, so the same steps on the same code give the same pixels: every difference between two
@@ -288,7 +289,7 @@ export async function buildCompareSheet(
     },
     notes: [{ text: summary, tone: differing.length ? "amber" : "green" }],
   });
-  return { png, finding: { severity: "info", title: `compare: ${summary}` }, differing };
+  return { png, finding: { severity: "info", title: `compare: ${summary}` }, differing, compared: picked.length };
 }
 
 export type Zoom = "auto" | NormRect;
