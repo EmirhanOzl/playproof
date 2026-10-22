@@ -1,0 +1,36 @@
+name: Release
+
+# Push a tag like v0.2.0 (matching package.json) to test, publish to npm and create the GitHub release.
+# Publishing uses npm trusted publishing (OIDC): no npm token is stored anywhere, and npm attaches provenance.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Tag matches package.json
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm ci
+      - run: node src/cli.ts install-browser --with-deps
+      - run: npm run check
+      - run: npm publish --access public
+      - name: GitHub release with the changelog entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 == "## " v {on=1; next} /^## / && on {exit} on' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md --verify-tag
