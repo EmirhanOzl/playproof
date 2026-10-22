@@ -1,7 +1,8 @@
 {
   "name": "playproof",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Eyes and hands for browser games. Lets coding agents (and you) see animation frame by frame, play scripted input, fuzz for crashes, check phone layouts and measure frame pacing.",
+  "mcpName": "io.github.EmirhanOzl/playproof",
   "keywords": [
     "game",
     "gamedev",

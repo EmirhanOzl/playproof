@@ -40,3 +40,10 @@ jobs:
           major="${major%%.*}"
           git tag -f "$major" "$GITHUB_REF_NAME^{}"
           git push -f origin "refs/tags/$major"
+      - name: Publish to the MCP Registry (GitHub OIDC, no secrets)
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          # npm needs a moment before the new version is visible to the registry's package check.
+          for i in $(seq 1 30); do npm view "playproof@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1 && break; sleep 20; done
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish

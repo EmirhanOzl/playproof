@@ -19,10 +19,15 @@ execFileSync(process.platform === "win32" ? "npm.cmd" : "npm", ["version", versi
 });
 
 const manifests = [".claude-plugin/plugin.json", ".codex-plugin/plugin.json", ".cursor-plugin/plugin.json", "gemini-extension.json", "plugin.json"];
-for (const file of [...manifests, ".claude-plugin/marketplace.json"]) {
-  const data = JSON.parse(readFileSync(file, "utf8")) as { version?: string; plugins?: { version?: string }[] };
+for (const file of [...manifests, ".claude-plugin/marketplace.json", "server.json"]) {
+  const data = JSON.parse(readFileSync(file, "utf8")) as {
+    version?: string;
+    plugins?: { version?: string }[];
+    packages?: { version?: string }[];
+  };
   if (data.version !== undefined) data.version = version;
   for (const plugin of data.plugins ?? []) if (plugin.version !== undefined) plugin.version = version;
+  for (const pkg of data.packages ?? []) if (pkg.version !== undefined) pkg.version = version;
   writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
   console.log(`${file} → ${version}`);
 }

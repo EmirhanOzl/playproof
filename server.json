@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.EmirhanOzl/playproof",
+  "title": "playproof",
+  "description": "See and playtest browser games: frame-by-frame motion, crash hunting, phone layouts, frame pacing.",
+  "repository": {
+    "url": "https://github.com/EmirhanOzl/playproof",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/EmirhanOzl/playproof",
+  "version": "0.3.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "playproof",
+      "version": "0.3.2",
+      "runtimeHint": "npx",
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
