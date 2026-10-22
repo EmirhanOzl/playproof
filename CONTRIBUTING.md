@@ -26,3 +26,11 @@ New findings should be worth a look every time they fire. Prefer missing an edge
 ## Style
 
 TypeScript, run directly by Node (type stripping), so only erasable syntax: no enums, namespaces or parameter properties. Match the surrounding code; comments explain why, not what.
+
+## Releasing
+
+1. Add a `## <version>` section to `CHANGELOG.md` (it becomes the release notes).
+2. `node scripts/set-version.ts <version>` updates `package.json` and every plugin manifest.
+3. Commit, then `git tag v<version> && git push origin v<version>`.
+
+The Release workflow tests the tag, publishes to npm through trusted publishing (no tokens; npm adds provenance), creates the GitHub release and moves the `v0` tag that the GitHub Action is used by.
